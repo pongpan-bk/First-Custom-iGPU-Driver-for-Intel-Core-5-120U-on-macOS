@@ -1,0 +1,55 @@
+==================================================================
+ MyIntelGPU KEXT — PROOF OF ACTIVE USE (collected live from machine)
+ Machine: iMac (iMac20,1) | macOS 13.7.8 | Acer Aspire AL15-52P
+ Collected: 08/02/2026 15:17:11
+==================================================================
+
+[PROOF 1] Kext is loaded in kernel
+---------------------------------------------------------------
+  147    0 0xffffff7f97136000 0x9000     0x9000     com.pongpan-bk.MyIntelGPU (1.0.0) 9ED68288-D113-370E-B552-C931BCF3DE7D <116 7 6 3 1>
+
+[PROOF 2] Loaded binary hash matches known-good version [5] (4GB safe)
+---------------------------------------------------------------
+  L/E hash : 4180ac8d56356a6041e15ebf78840deab48f039dd6aa9d726356f2d6b84fde4f
+  README[5]: 4180ac8d56356a6041e15ebf78840deab48f039dd6aa9d726356f2d6b84fde4f
+  Match    : YES (identical binary)
+
+[PROOF 3] Kext classes instantiated and running (not just loaded)
+---------------------------------------------------------------
+"MyIntelGPU"=1
+"IntelFramebuffer"=1
+"MyIntelFramebuffer"=1
+
+[PROOF 4] Device tree location — attached to the iGPU (GFX0@2)
+---------------------------------------------------------------
+    | |   | | |       "IODisplayPrefsKeyOld" = "IOService:/AppleACPIPlatformExpert/PC00/AppleACPIPCI/GFX0@2/.Display_boot/display0/AppleDisplay-756e6b6e-717"
+    | |   | | |       "IODisplayPrefsKey" = "IOService:/AppleACPIPlatformExpert/PC00/AppleACPIPCI/GFX0@2/.Display_boot/display0/AppleDisplay-756e6b6e-717"
+
+[PROOF 5] IOPCIMatch — claims PCI display controller
+---------------------------------------------------------------
+  "CFBundleIdentifier" => "com.pongpan-bk.MyIntelGPU"
+      "CFBundleIdentifier" => "com.pongpan-bk.MyIntelGPU"
+      "IOPCIClassMatch" => "0x03000000&0xff000000"
+      "IOProviderClass" => "IOPCIDevice"
+
+[PROOF 6] Display output is LIVE via MyIntelFramebuffer
+---------------------------------------------------------------
+      Chipset Model: Intel(R) Iris(R) Plus Graphics
+      VRAM (Dynamic, Max): 4096 MB
+          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)
+          Main Display: Yes
+
+[PROOF 7] Reported VRAM values (what kext publishes vs real)
+---------------------------------------------------------------
+  VRAM,totalMB (kext-published): <0010000000000000>
+  VRAM,memSize (kext-published): <0000000001000000>
+  framebuffer-stolenmem (real) : <00000100>
+  hw.memsize (real total RAM)  : 16384 MB
+
+==================================================================
+ CONCLUSION: MyIntelGPU.kext (com.pongpan-bk.MyIntelGPU v1.0.0)
+ is LOADED, INSTANTIATED, attached to the iGPU (GFX0@2),
+ drives the 1920x1080 display, and publishes VRAM properties.
+ The VRAM figure is a kext-published value (cosmetic); the kext
+ itself performs real framebuffer duty.
+==================================================================
