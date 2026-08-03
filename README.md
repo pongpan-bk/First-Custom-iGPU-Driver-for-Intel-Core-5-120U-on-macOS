@@ -1,3 +1,4 @@
+<img width="1919" height="1079" alt="Untitled" src="https://github.com/user-attachments/assets/bb838bf1-e624-4837-8c46-2e073b24e394" />
 # THE FIRST INTEL CORE 5 120U HACKINTOSH IN THE WORLD
 
 ```text
