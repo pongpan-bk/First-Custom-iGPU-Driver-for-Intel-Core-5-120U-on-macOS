@@ -29,15 +29,15 @@
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
 			<key>IOPCIMatch</key>
-			<string>0x8086 0xA7AC 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
+			<string>0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
 			<integer>100000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
-			<data>AAAAAA==</data>
+			<data>CAAAAA==</data>
 			<key>MetalStatisticsName</key>
-			<string>Intel (R) Iris (R) Xe Graphics</string>
+			<string>Intel® Graphics</string>
 			<key>model</key>
 			<string>Intel Iris Xe 80EU</string>
 		</dict>
@@ -51,11 +51,11 @@
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>22.6.0</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>22.6.0</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>22.6.0</string>
+		<string>23.0.0</string>
 	</dict>
 </dict>
 </plist>
