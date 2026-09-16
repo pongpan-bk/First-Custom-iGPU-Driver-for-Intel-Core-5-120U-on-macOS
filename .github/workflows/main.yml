@@ -1,4 +1,4 @@
-name: 🚀 Intel iGPU Silicon Awake Core Builder
+name:Intel iGPU Silicon Awake Core Builder
 
 on:
   push:
