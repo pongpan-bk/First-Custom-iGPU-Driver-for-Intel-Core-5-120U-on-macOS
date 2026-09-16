@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>MyIntelGPU</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.pongpan-bk.MyIntelGPU</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MyIntelGPU</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.1.3</string>
+	<key>CFBundleVersion</key>
+	<string>3.1.35</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>Universal_AutoMatch_GPU</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.pongpan-bk.MyIntelGPU</string>
+			<key>IOClass</key>
+			<string>MyIntelGPU</string>
+			<key>IOMatchCategory</key>
+			<string>IOAccelerator</string>
+			<key>IOPCIMatch</key>
+			<string>0xa7ac8086 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0x46a88086</string>
+			<key>IOProbeScore</key>
+			<integer>2000</integer>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+			<key>IOVARendererID</key>
+			<data>AAAAAA==</data>
+			<key>MetalStatisticsName</key>
+			<string>Raptor Lake-P</string>
+			<key>model</key>
+			<string>Integrated GPU</string>
+		</dict>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
+	<key>OSBundleAllowUserLoad</key>
+	<true/>
+	<key>OSBundleRequired</key>
+	<string>Root</string>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>597</string>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>2.9</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>22.6.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>22.6.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>22.6.0</string>
+	</dict>
+</dict>
+</plist>
