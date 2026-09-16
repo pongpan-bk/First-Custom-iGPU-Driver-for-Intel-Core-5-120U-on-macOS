@@ -29,25 +29,21 @@
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
 			<key>IOPCIMatch</key>
-			<string>0xa7ac8086 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0x46a88086</string>
+			<string>0x8086 0xA7AC 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
-			<integer>2000</integer>
+			<integer>100000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>AAAAAA==</data>
 			<key>MetalStatisticsName</key>
-			<string>Raptor Lake-P</string>
-			<key>model</key>
 			<string>Integrated GPU</string>
+			<key>model</key>
+			<string>Intel Iris Xe 80EU</string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
-	<key>OSBundleAllowUserLoad</key>
-	<true/>
-	<key>OSBundleRequired</key>
-	<string>Root</string>
 	<key>OSBundleLibraries</key>
 	<dict>
 		<key>com.apple.iokit.IOGraphicsFamily</key>
