@@ -40,11 +40,10 @@
 			<string>Raptor Lake-P</string>
 			<key>model</key>
 			<string>Intel Iris Xe Graphics</string>
-			<!-- ใส่ค่า VRAM 2048MB (2GB) แบบ Data Hex ที่แปลงให้เรียบร้อยแล้ว -->
 			<key>VRAM,memSize</key>
-			<data>AAAAYAAAAAA=</data>
+			<data>AAAAgAAAAAA=</data>
 			<key>VRAM,totalMB</key>
-			<data>AAAIAAAAAAA=</data>
+			<data>AAAQAAAAAAA=</data>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
