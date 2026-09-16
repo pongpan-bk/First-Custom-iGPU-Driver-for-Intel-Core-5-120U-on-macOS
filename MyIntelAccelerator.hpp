@@ -21,6 +21,8 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/graphics/IOAccelerator.h>
 #include <IOKit/graphics/IOAccelSurfaceConnect.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOMemoryDescriptor.h>
 #include "MyIntelGEMBuffer.hpp"
 
 class MyIntelGPU;
@@ -126,10 +128,16 @@ public:
 private:
     MyIntelAccelerator *fAccel;  /* provider, not retained */
 
+    uint32_t fClientType;  /* user-client type from initWithTask (5 = Metal IOAccel device/shared contract) */
     uint32_t fSurfaceID;  /* last SetIDMode target */
     uint32_t fColorMode;
     uint32_t fShapeW;
     uint32_t fShapeH;
+
+    task_t fClientTask;
+    IOBufferMemoryDescriptor *fDirtyRingMD;
+    IOMemoryMap *fDirtyRingMap;
+    mach_vm_address_t fDirtyRingUserVA;
 };
 
 #endif /* __MY_INTEL_ACCELERATOR_HPP__ */

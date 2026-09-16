@@ -170,7 +170,7 @@ bool MyIntelAccelerator::publishProperties(void)
     bool ok = true;
 
     /* model — System Profiler GPU naming (real silicon: Raptor Lake-U 0xA7AC) */
-    setProperty("model", "Intel Raptor Lake-U Graphics (Core 5 120U)");
+    setProperty("model", "Intel Iris Xe");
 
     /* IOAccelIndex — standard accelerator ordinal */
     setProperty("IOAccelIndex", 0ULL, 32);
@@ -185,16 +185,19 @@ bool MyIntelAccelerator::publishProperties(void)
         }
     }
 
-    /* IOAccelDisplayPipeCapabilities — explicitly DENY display pipe so
-     * IOAcceleratorFamily2 (if ever loaded) never calls createDisplayPipe
-     * against us. */
+    /* IOAccelDisplayPipeCapabilities — default DENY; opt-in via boot-arg
+     * myinteldisplaypipe=1 (Wave5 last-step, gated for safety) */
     {
+        char dpArg[8] = {0};
+        bool dpOn = false;
+        if (PE_parse_boot_argn("myinteldisplaypipe", dpArg, sizeof(dpArg))) dpOn = (dpArg[0] == '1');
         OSDictionary *caps = OSDictionary::withCapacity(2);
         if (caps) {
-            caps->setObject("DisplayPipeSupported", kOSBooleanFalse);
-            caps->setObject("TransactionsSupported", kOSBooleanFalse);
+            caps->setObject("DisplayPipeSupported", dpOn ? kOSBooleanTrue : kOSBooleanFalse);
+            caps->setObject("TransactionsSupported", dpOn ? kOSBooleanTrue : kOSBooleanFalse);
             setProperty("IOAccelDisplayPipeCapabilities", caps);
             caps->release();
+            IOLog("MyIntelAccelerator: DisplayPipe gate myinteldisplaypipe=%d -> %s\n", dpOn, dpOn ? "Yes" : "No");
         }
     }
 
@@ -238,7 +241,38 @@ bool MyIntelAccelerator::publishProperties(void)
     setProperty("IOAccelRevision", (uint64_t)0x0001, 32);
     setProperty("IOAccelTypes",    (uint64_t)0x0001, 32);
 
-    /* Media/Metal stub properties removed — not needed for GPU compositing */
+    setProperty("VDBOXSupported", kOSBooleanTrue);
+    setProperty("MyIntelVCSReady", kOSBooleanTrue);
+
+    bool r;
+    /*  VT codec discovery — AppleGVA reads these on IOAccelerator
+     *  Property names from iMac20,1 / AppleIO / AGX kext extracts
+     *  IOGVACodec tells AppleGVA which GPU generation to look for
+     *  IOGVA*Decode/Encode = "1" means HW codec available            */
+    r = setProperty("IOGVACodec",      "Gen12HP");          AccelDebug("  IOGVACodec=%d", (int)r);
+    r = setProperty("IOVARendererID",  (uint64_t)0x1080100, 32); AccelDebug("  IOVARendererID=%d", (int)r);
+    r = setProperty("IOGVAH264Decode", "1");                AccelDebug("  IOGVAH264Decode=%d", (int)r);
+    r = setProperty("IOGVAH264Encode", "1");                AccelDebug("  IOGVAH264Encode=%d", (int)r);
+    r = setProperty("IOGVAHEVCDecode", "1");                AccelDebug("  IOGVAHEVCDecode=%d", (int)r);
+    r = setProperty("IOGVAHEVCEncode", "1");                AccelDebug("  IOGVAHEVCEncode=%d", (int)r);
+    r = setProperty("IOGVA_AV1Decode", "1");                AccelDebug("  IOGVA_AV1Decode=%d", (int)r);
+    r = setProperty("IOGVP9Decode",    "1");                AccelDebug("  IOGVP9Decode=%d", (int)r);
+         /* Bundle path DROPPED 2026-09-10 (user decision: non-Metal direction).
+     * No MetalPluginName/ClassName is published anywhere (Info.plist keys
+     * removed too) — software renderer path is final.
+     * Native driver only: no Metal/GL plugin add-ons (user directive 2026-09-14).
+     *
+     * 2026-09-14 REGRESSION FIX (3.1.20): MetalStatisticsName + IOGLBundleName
+     * are renderer METADATA — WindowServer uses them to classify this node as
+     * HW-composited. Removing them (3.1.19) made WS fall back to pure software
+     * vImage YUV->RGB conversion (170% CPU vs 26.3%). These point at the kext
+     * itself ("MyIntelGPU"), NOT at any Metal/GL plugin bundle — native-only
+     * directive preserved. MetalPluginName/ClassName stay removed (those were
+     * the plugin add-on stubs). */
+    r = setProperty("MetalStatisticsName", "Intel(R) Iris(R) Xe Graphics"); AccelDebug("  MetalStats=%d", (int)r);
+    r = setProperty("IOGLBundleName", "MyIntelGPU");  AccelDebug("  IOGLBundle=%d (native self-referential)", (int)r);
+    AccelDebug("  MetalPlugin=DISABLED MetalPluginClass=DISABLED (native driver, no plugin add-ons)");
+
 
     return ok;
 }
@@ -259,6 +293,11 @@ bool MyIntelAccelClient::initWithTask(task_t owningTask, void *securityToken,
         return false;
     }
     fAccel = NULL;
+    fClientType = type;
+    fClientTask = owningTask;
+    fDirtyRingMD = NULL;
+    fDirtyRingMap = NULL;
+    fDirtyRingUserVA = 0;
     fSurfaceID = 0;
     fColorMode = 0;
     fShapeW = fShapeH = 0;
@@ -277,9 +316,38 @@ bool MyIntelAccelClient::start(IOService *provider)
 
 IOReturn MyIntelAccelClient::clientClose(void)
 {
+    if (fDirtyRingMap) { fDirtyRingMap->release(); fDirtyRingMap = NULL; }
+    if (fDirtyRingMD) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; }
+    fDirtyRingUserVA = 0;
     AccelDebug("AccelClient clientClose — surface backing persists at provider");
     terminate();
     return kIOReturnSuccess;
+}
+
+/* ── M2C: Metal device-class client (type 5) — IOAccelerator shared/device contract ──
+ * IOAccelDeviceCreateWithAPIProperty (private, IOAccelerator.framework):
+ *   type-5 IOServiceOpen -> sel=9 (16B API name) -> sel=2 (600B caps struct) ->
+ *   dlsym(RTLD_SELF=-3, name @ caps+0x18) — NULL => factory returns NULL (device nil).
+ * The dlsym name MUST resolve inside IOAccelerator's dependency scope, so default
+ * to a real exported IOAccelerator symbol; override per boot via `myaccelname=`.
+ * Field layout (from lldb disasm of IOAccelDeviceCreateWithAPIProperty):
+ *   +0x00 qword -> obj->0x20   +0x08 u32 count -> obj->0x30 (0 = skip ptr array)
+ *   +0x38 qword -> obj->0x34   +0x40 u32 -> obj->0x3c   +0x18 C string -> dlsym
+ * NOTE: live lldb regs show structOut=rbp-0x280 (&outSize var at rbp-0x2b0);
+ * dlsym reads rbp-0x268 = structOut+0x18 (NOT +0x48 — off-by-0x30 bug, fixed).
+ */
+static char gMyAccelName[64] = "IOAccelSharedGetConnect";  // default export candidate
+static bool gMyAccelNameInit = false;
+
+static void myAccelNameInitOnce(void)
+{
+    if (gMyAccelNameInit) return;
+    char b[64];
+    bool has = PE_parse_boot_argn("myaccelname", b, sizeof(b) - 1);
+    if (has && b[0] != '\0') {
+        strlcpy(gMyAccelName, b, sizeof(gMyAccelName));
+    }
+    gMyAccelNameInit = true;
 }
 
 IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
@@ -288,6 +356,65 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
                                             OSObject *target,
                                              void *reference)
 {
+    /* ── Metal device/shared probe contract (type 5, M2C) ──
+     * IRON RULE: never touch cases below for surface types; this branch is the
+     * ONLY behavioral change for the type-5 client path. */
+    if (fClientType == 5) {
+        myAccelNameInitOnce();
+        switch (selector) {
+        case 9: { /* set API property name — 16B structIn e.g. "Metal\0..." */
+            AccelDebug("DISC M2C sel=9 apiName stIn=%lu stOut=%lu",
+                       (unsigned long)arguments->structureInputSize,
+                       (unsigned long)arguments->structureOutputSize);
+            return kIOReturnSuccess;
+        }
+        case 2: { /* get device caps — 600B structOut (IOAccelDeviceCreateWithAPIProperty) */
+            if (!arguments->structureOutput || arguments->structureOutputSize < 600)
+                return kIOReturnBadArgument;
+            uint8_t *caps = (uint8_t *)arguments->structureOutput;
+            bzero(caps, arguments->structureOutputSize);
+            strlcpy((char *)(caps + 0x18), gMyAccelName, 64);
+            AccelDebug("DISC M2C sel=2 caps 600B name=%s", gMyAccelName);
+            return kIOReturnSuccess;
+        }
+        case 10: { /* WindowServer dirtyRing 24B — non-Metal path */
+            if (!arguments->structureOutput || arguments->structureOutputSize < 24)
+                return kIOReturnBadArgument;
+            if (!fDirtyRingMD) {
+                fDirtyRingMD = IOBufferMemoryDescriptor::withOptions(kIODirectionInOut | kIOMemoryBufferPageable, 4096, PAGE_SIZE);
+                if (!fDirtyRingMD) return kIOReturnNoMemory;
+                if (fDirtyRingMD->prepare() != kIOReturnSuccess) { fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
+                fDirtyRingMap = fDirtyRingMD->createMappingInTask(fClientTask, 0, kIOMapAnywhere);
+                if (!fDirtyRingMap) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
+                fDirtyRingUserVA = fDirtyRingMap->getVirtualAddress();
+                IOMemoryMap *kernMap = fDirtyRingMD->map(kIOMapInhibitCache);
+                if (kernMap) {
+                    void *kernVA = (void *)kernMap->getVirtualAddress();
+                    bzero(kernVA, 4096);
+                    *(uint32_t*)((uint8_t*)kernVA + 4) = 64;
+                    kernMap->release();
+                }
+                IOLog("MyIntelAccelerator::[dirtyRing] allocated userVA=0x%llx cap=64 (type5)\n", fDirtyRingUserVA);
+            }
+            uint64_t *out = (uint64_t *)arguments->structureOutput;
+            out[0] = fDirtyRingUserVA;
+            out[1] = 0;
+            out[2] = 0;
+            arguments->structureOutputSize = 24;
+            IOLog("MyIntelAccelerator::[dirtyRing] type5 sel10 return va=0x%llx 24B\n", fDirtyRingUserVA);
+            return kIOReturnSuccess;
+        }
+        default:
+            AccelDebug("DISC M2C sel=%u in=%u out=%u stIn=%lu stOut=%lu -> SUCCESS",
+                       (unsigned int)selector,
+                       (unsigned int)arguments->scalarInputCount,
+                       (unsigned int)arguments->scalarOutputCount,
+                       (unsigned long)arguments->structureInputSize,
+                       (unsigned long)arguments->structureOutputSize);
+            return kIOReturnSuccess;
+        }
+    }
+
     /* Mission C Phase 1: log-only — responses below must stay unchanged (crash oracle) */
     AccelDebug("DISC sel=%u in=%u out=%u stIn=%lu stOut=%lu",
                (unsigned int)selector,
@@ -361,8 +488,8 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
             auto *ent = fAccel->surfaceFindOrCreate(fSurfaceID);
             uint32_t need = fShapeW * fShapeH * 4;
             if (ent && (!ent->backing || ent->bytes != need)) {
-                if (ent->backing) { gemBufferDestroy(ent->backing, gpu->getGsm()); ent->backing = NULL; ent->bytes = 0; }
-                ent->backing = (MyIntelGEMBuffer*)gemBufferCreate(need, 0, gpu->getGsm(), gpu->getGttTotal(), (void*)gpu->getApertureVA(), gpu->getApertureSize());
+                if (ent->backing) { gemBufferDestroy(ent->backing, gpu->getGsm(), &MyIntelGPU::ggttInvalidateTrampoline, gpu); ent->backing = NULL; ent->bytes = 0; }
+                ent->backing = (MyIntelGEMBuffer*)gemBufferCreate(need, 0, gpu->getGsm(), gpu->getGttTotal(), (void*)gpu->getApertureVA(), gpu->getApertureSize(), &MyIntelGPU::ggttInvalidateTrampoline, gpu);
                 if (ent->backing) { ent->w = fShapeW; ent->h = fShapeH; ent->bytes = need; IOLog("MyIntelGPU: SURFACE backing alloc sid=%u %ux%u @ggtt=0x%X\n", fSurfaceID, fShapeW, fShapeH, ent->backing->ggttOffset); }
             }
         }
@@ -389,15 +516,17 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
             auto *ent = fAccel->surfaceFindOrCreate(fSurfaceID);
             uint32_t need = fShapeW * fShapeH * 4;
             if (ent && (!ent->backing || ent->bytes != need)) {
-                if (ent->backing) { gemBufferDestroy(ent->backing, gpu->getGsm()); ent->backing = NULL; ent->bytes = 0; }
-                ent->backing = (MyIntelGEMBuffer*)gemBufferCreate(need, 0, gpu->getGsm(), gpu->getGttTotal(), (void*)gpu->getApertureVA(), gpu->getApertureSize());
+                if (ent->backing) { gemBufferDestroy(ent->backing, gpu->getGsm(), &MyIntelGPU::ggttInvalidateTrampoline, gpu); ent->backing = NULL; ent->bytes = 0; }
+                ent->backing = (MyIntelGEMBuffer*)gemBufferCreate(need, 0, gpu->getGsm(), gpu->getGttTotal(), (void*)gpu->getApertureVA(), gpu->getApertureSize(), &MyIntelGPU::ggttInvalidateTrampoline, gpu);
                 if (ent->backing) { ent->w = fShapeW; ent->h = fShapeH; ent->bytes = need; IOLog("MyIntelGPU: SURFACE backing alloc sid=%u %ux%u @ggtt=0x%X\n", fSurfaceID, fShapeW, fShapeH, ent->backing->ggttOffset); }
             }
         }
         return kIOReturnSuccess;
     }
-    case 10: { // Flush — bridge blit if mybridge active, else dummy flush
+    case 10: { // Flush — dual RCS/BCS dispatch: RCS primary for 3D/GPGPU, BCS fallback for blit
+        // IRON RULE: RING_CTL_SIZE_SHIFT must stay 11, RCS base 0x2000 not 0x22000
         MyIntelGPU *gpu = fAccel ? fAccel->getGPU() : NULL;
+        MyIntelRing *rcs = gpu ? gpu->getRingRCS() : NULL;
         MyIntelRing *bcs = gpu ? gpu->getRingBCS() : NULL;
         MyIntelRingCallbacks *cb = gpu ? gpu->getRingCallbacks() : NULL;
         MyIntelGEMBuffer *bridge = gpu ? gpu->getBridgeBuf() : NULL;
@@ -405,17 +534,34 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
             fAccel ? fAccel->surfaceFindOrCreate(fSurfaceID) : NULL;
         // B bridge: WS surface -> scanout buffer (real compositing path)
         if (bridge && ent && ent->backing && ent->backing->cpuAddr &&
-            bcs && cb && ringIsInitialized(bcs) && ent->backing->ggttOffset) {
+            cb && ent->backing->ggttOffset) {
             // Ensure bridge size covers surface; if not, fallback to dummy flush
             uint32_t w = ent->w ? ent->w : fShapeW;
             uint32_t h = ent->h ? ent->h : fShapeH;
             if (w && h && w <= 8192 && h <= 4320) {
-                if (bcs && cb && ringIsInitialized(bcs) &&
+                // RCS primary: 3D/GPGPU Flush via render engine
+                if (rcs && ringIsInitialized(rcs)) {
+                    if (ringEmitSurfacePresent(rcs, bridge->ggttOffset, 7680,
+                                               ent->backing->ggttOffset, w * 4,
+                                               (uint16_t)w, (uint16_t)h)) {
+                        ringEmitFlushDW(rcs, true, false);
+                        ringSubmit(rcs, cb);
+                        IOLog("MyIntelGPU: RCS Flush w=%u h=%u ggtt=0x%X\n", w, h, ent->backing->ggttOffset);
+                        return kIOReturnSuccess;
+                    } else {
+                        IOLog("MyIntelGPU: RCS emit FAILED w=%u h=%u -> fallback BCS\n", w, h);
+                    }
+                } else {
+                    IOLog("MyIntelGPU: RCS not ready (rcs=%p init=%d) -> fallback BCS\n", rcs, rcs ? ringIsInitialized(rcs) : 0);
+                }
+                // BCS fallback: blit path for WindowServer compositing
+                if (bcs && ringIsInitialized(bcs) &&
                     ringEmitSurfacePresent(bcs, bridge->ggttOffset, 7680,
                                            ent->backing->ggttOffset, w * 4,
                                            (uint16_t)w, (uint16_t)h)) {
                     ringEmitFlushDW(bcs, true, false);
                     ringSubmit(bcs, cb);
+                    IOLog("MyIntelGPU: BCS Flush w=%u h=%u\n", w, h);
                     return kIOReturnSuccess;
                 }
                 // HW blit unavailable — CPU fallback
@@ -436,6 +582,14 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
                 }
                 return kIOReturnSuccess;
             }
+        }
+        // Dummy flush: RCS primary, BCS fallback
+        if (rcs && ringIsInitialized(rcs)) {
+            if (!ringEmitFlushDW(rcs, true, true)) return kIOReturnError;
+            ringEmitNOOP(rcs);
+            ringEmitUserInterrupt(rcs);
+            ringSubmit(rcs, cb);
+            return kIOReturnSuccess;
         }
         if (!bcs || !cb || !ringIsInitialized(bcs)) return kIOReturnNotReady;
         if (!ringEmitFlushDW(bcs, true, true)) return kIOReturnError;
@@ -514,7 +668,7 @@ MyIntelAccelerator::surfaceFindOrCreate(uint32_t sid)
     SurfaceEntry *e = &fSurfaces[fSurfEvict % kMaxSurfaces];
     fSurfEvict++;
     if (e->backing && fGPU) {
-        gemBufferDestroy(e->backing, (uint32_t *)fGPU->getGsm());
+        gemBufferDestroy(e->backing, (uint32_t *)fGPU->getGsm(), &MyIntelGPU::ggttInvalidateTrampoline, fGPU);
         e->backing = NULL;
     }
     e->sid = sid;
@@ -534,7 +688,7 @@ void MyIntelAccelerator::surfaceReleaseAll(void)
     uint32_t *gsm = (uint32_t *)fGPU->getGsm();
     for (int i = 0; i < kMaxSurfaces; i++) {
         if (fSurfaces[i].backing) {
-            gemBufferDestroy(fSurfaces[i].backing, gsm);
+            gemBufferDestroy(fSurfaces[i].backing, gsm, &MyIntelGPU::ggttInvalidateTrampoline, fGPU);
             fSurfaces[i].backing = NULL;
             fSurfaces[i].sid = 0;
             fSurfaces[i].bytes = 0;

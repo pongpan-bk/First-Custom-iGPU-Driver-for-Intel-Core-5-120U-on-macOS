@@ -65,7 +65,7 @@ static const char *engineName(MyIntelEngineType type)
 
 /* Forward declarations (defined below ringCreate) */
 static bool lrcBuildContext(MyIntelRing *ring);
-static bool lrcBuildContextXcs(MyIntelRing *ring);
+bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset);
 static void lrcUpdateRingRegs(MyIntelRing *ring);
 
 /*
@@ -408,36 +408,24 @@ MyIntelRing *ringCreate(
         ring->lrcVaddr = (uint32_t *)cb->gemGetVAddr(cb->context, ring->lrcGemBuf);
         RING_DEBUG_RAW("ringCreate: LRC context @ ggtt=0x%X vaddr=%p size=0x%X",
                        ring->lrcGgtt, ring->lrcVaddr, LRC_CONTEXT_SIZE);
-        if (ring->engineType == kMyIntelEngineBCS ||
-            ring->engineType == kMyIntelEngineVCS ||
-            ring->engineType == kMyIntelEngineVECS) {
-            /* 2.0.250: i915 gen12 uses the XCS register image (52 dw,
-             * gen12_xcs_offsets) for EVERY engine except RENDER — VCS was
-             * previously built with the 185-dword RCS image, which carries
-             * render-only regs (RCS_INDIRECT_CTX, R_PWR_CLK_STATE, GPR
-             * block) that don't exist on VDBOX. */
-            if (lrcBuildContextXcs(ring)) {
-                ring->lrcInited = true;
+        if (lrcBuildContext(ring)) {
+            ring->lrcInited = true;
 
-                /* Context runs in 4-level PPGTT (LEGACY_64B): the indirect
-                 * BB fetch walks PPGTT, but only batch pages were mapped.
-                 * Map ALL LRC pages into the identity window or the restore
-                 * fetch faults on not-present (ESR bit0, head frozen). */
-                const uint64_t *lrcPhys =
-                    cb->gemGetPagesPhys(cb->context, ring->lrcGemBuf);
-                if (lrcPhys &&
-                    lrcMapBatchPages(ring, ring->lrcGgtt, lrcPhys,
-                                     LRC_CONTEXT_SIZE / GEM_PAGE_SIZE)) {
-                    RING_DEBUG_RAW("ringCreate: LRC %u pages mapped into PPGTT",
-                                   LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
-                } else {
-                    RING_DEBUG_RAW("ringCreate: WARNING — LRC PPGTT map failed "
-                                   "(indirect BB will fault)");
-                }
+            /* Context runs in 4-level PPGTT (LEGACY_64B): the indirect
+             * BB fetch walks PPGTT, but only batch pages were mapped.
+             * Map ALL LRC pages into the identity window or the restore
+             * fetch faults on not-present (ESR bit0, head frozen). */
+            const uint64_t *lrcPhys =
+                cb->gemGetPagesPhys(cb->context, ring->lrcGemBuf);
+            if (lrcPhys &&
+                lrcMapBatchPages(ring, ring->lrcGgtt, lrcPhys,
+                                 LRC_CONTEXT_SIZE / GEM_PAGE_SIZE)) {
+                RING_DEBUG_RAW("ringCreate: LRC %u pages mapped into PPGTT",
+                               LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
             } else {
-                RING_DEBUG_RAW("ringCreate: WARNING — XCS LRC image build failed, using legacy submit");
+                RING_DEBUG_RAW("ringCreate: WARNING — LRC PPGTT map failed "
+                               "(indirect BB will fault)");
             }
-        } else if (lrcBuildContext(ring)) {
             ring->lrcInited = true;
         } else {
             RING_DEBUG_RAW("ringCreate: WARNING — LRC image build failed, using legacy submit");
@@ -923,35 +911,36 @@ static bool lrcBuildContext(MyIntelRing *ring)
     /* init_common_regs(): bb_offset slot = 0 */
     state[CTX_BB_OFFSET] = 0;
 
-    OSSynchronizeIO();
+OSSynchronizeIO();
 
-    RING_DEBUG_RAW("lrcBuildContext: state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X",
-                   LRC_STATE_OFFSET, ring->ggttOffset, ring->size,
+    RING_DEBUG_RAW("lrcBuildContext: RCS state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X",
+                   LRC_RCS_OFFSET, ring->ggttOffset, ring->size,
                    state[CTX_RING_CTL], state[CTX_CONTEXT_CONTROL]);
+
+    /* ── F9: Build XCS engine contexts (VCS, VECS, BCS, CCS) ──
+     * Each XCS engine gets its own 4KB page in the LRC context image.
+     * The XCS context layout is identical for all XCS engines (52 dwords).
+     */
+    if (!lrcBuildContextXcsAt(ring, LRC_VCS_OFFSET))  return false;  /* VCS  */
+    if (!lrcBuildContextXcsAt(ring, LRC_VECS_OFFSET)) return false;  /* VECS */
+    if (!lrcBuildContextXcsAt(ring, LRC_BCS_OFFSET))  return false;  /* BCS  */
+    if (!lrcBuildContextXcsAt(ring, LRC_CCS_OFFSET))  return false;  /* CCS  */
+
+    RING_DEBUG_RAW("lrcBuildContext: full LRC built @%p size=0x%X (RCS+VCS+VECS+BCS+CCS)",
+                   ring->lrcVaddr, LRC_CONTEXT_SIZE);
     return true;
 }
 
 /*
  * ─────────────────────────────────────────────
- *  lrcBuildContextXcs — Build the Gen12 XCS (BCS) LRC image
+ *  lrcBuildContextXcsAt — Build XCS context at specific offset
  * ─────────────────────────────────────────────
- *  Fills the LRC context object with the gen12_xcs_offsets register stream
- *  (intel_lrc.c:227-257) — VERBATIM, 52 dwords = LRC_STATE_DWORDS_XCS:
- *    dw 0       : MI_NOOP
- *    dw 1-27    : LRI(13, POSTED)  0x244 0x034 0x030 0x038 0x03c 0x168
- *                  0x140 0x110 0x1c0 0x1c4 0x1c8 0x180 0x2b4
- *    dw 28-32   : NOP(5)
- *    dw 33-51   : LRI(9,  POSTED)  0x3a8 0x28c 0x288 0x284 0x280 0x27c
- *                  0x278 0x274 0x270   ← PDP3..PDP0 (PDP0 = PML4, 4-level)
- *  Blocks 1+2 are byte-identical to gen12_rcs_offsets (same CTX_* value-slot
- *  dword indices 0x03..0x33) — only blocks 3-5 are absent (XCS has no
- *  indirect-ctx regs, no R_PWR_CLK_STATE, no GPR block). Value patches
- *  mirror lrcBuildContext() for the slots that exist; CTX_MI_MODE (0x61)
- *  and CTX_BB_OFFSET (0x71) do NOT exist here.
+ *  Builds the Gen12 XCS (VCS/VECS/BCS/CCS) LRC context at a given page offset.
+ *  All XCS engines share the same 52-dword layout (gen12_xcs_offsets).
  */
-static bool lrcBuildContextXcs(MyIntelRing *ring)
+bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset)
 {
-    uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
+    uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + pageOffset);
     bzero(state, LRC_STATE_DWORDS_XCS * sizeof(uint32_t));
 
     state[0] = MI_NOOP;
@@ -1015,49 +1004,8 @@ static bool lrcBuildContextXcs(MyIntelRing *ring)
 
     OSSynchronizeIO();
 
-    /* ── Indirect / per-context BB activation (gen12 XCS slot map) ──
-     * i915 lrc_setup_indirect_ctx/bb_per_ctx target dword slots inside the
-     * first LRI block: dw19 = BB_PER_CTX_PTR val, dw20 = BB_STATE val,
-     * dw22 = BB_ADDR val. Without them (all zero) the element queues but
-     * never dispatches - head frozen@80 signature. Regions: page2 =
-     * INDIRECT_BB (BB_END-only minimal batch), page3 = PER_CTX_BB. */
-    {
-        /* Indirect BB page2: gen12 WA sequence + BB_END.
-         * Each WA is MI_LOADs that restore GPR/timestamp state; without
-         * them the XCS context image is considered incomplete and the
-         * element never dispatches (h=0 fault signature). */
-        /* Page math: img is dword*; each page = 512 dwords. State page =
-         * page1 (img+512*2 elements). Indirect BB = page2 = img+512*4.
-         * Earlier build used img+512*2 -> WROTE THE BATCH OVER THE STATE
-         * PAGE (this exact dump proved it) -> restore parsed garbage. */
-        uint32_t *img = (uint32_t *)((uint8_t *)ring->lrcVaddr);
-        bzero(img + 512 * 4, 4096);
-        bzero(img + 512 * 6, 4096);
-        {
-            uint32_t *cs = img + 512 * 4;
-            /* gen12_emit_timestamp_wa: 3x MI_LOAD via GPR0 */
-            uint32_t gpr0 = ring->mmioBase + 0x600;
-            uint32_t tsReg = ring->mmioBase + 0x3a8;
-            uint32_t tsSlot = ring->lrcGgtt + LRC_STATE_OFFSET + CTX_TIMESTAMP * 4;
-            *cs++ = MI_LOAD_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT | MI_LRI_LRM_CS_MMIO;
-            *cs++ = gpr0;
-            *cs++ = tsSlot; *cs++ = 0;
-            *cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRI_LRM_CS_MMIO;
-            *cs++ = gpr0; *cs++ = tsReg;
-            *cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRI_LRM_CS_MMIO;
-            *cs++ = gpr0; *cs++ = tsReg;
-            *cs++ = MI_BATCH_BUFFER_END;
-        }
-        img[512 * 3 + 0] = MI_BATCH_BUFFER_END;
-
-        // DISABLE indirect BB for now — test if HW dispatches without it
-        // (gen12 XCS may not require it; our BB with only BB_END may be confusing HW)
-        state[19] = 0; state[21] = 0; state[23] = 0;
-    }
-
-    RING_DEBUG_RAW("lrcBuildContextXcs: state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X (%u dw)",
-                   LRC_STATE_OFFSET, ring->ggttOffset, ring->size,
-                   state[CTX_RING_CTL], state[CTX_CONTEXT_CONTROL], LRC_STATE_DWORDS_XCS);
+    RING_DEBUG_RAW("lrcBuildContextXcsAt: XCS state@+0x%X ggtt=0x%X size=0x%X",
+                   pageOffset, ring->ggttOffset, ring->size);
     return true;
 }
 
@@ -1660,9 +1608,26 @@ uint32_t emitMiMathProof(uint32_t *dst, uint32_t storeAddr,
     const uint32_t gpr1 = gpr0 + 8;
 
     uint32_t n = 0;
+    /* MI_NOOP is REQUIRED before every MI_LRI — i915 intel_gpu_commands.h:
+     * "Always issue a MI_NOOP _before_ the MI_LOAD_REGISTER_IMM - otherwise
+     * hw simply ignores the register load under certain conditions."
+     * (The proven WriteMagic batch already does this: cmd[5] NOOP before
+     * cmd[6] LRI; MiMath's LRI was the first command → LRI ignored → GPR0
+     * kept the stale 0xcafebabe → sum never computed.)
+     * Also zero the top 32 bits of each GPR first, mirroring i915 noa_wait:
+     * "clear out the top 32b bits of the register because the ALU works
+     * 64bits" — garbage hi halves would corrupt the 64-bit ADD carry. */
+    dst[n++] = 0;                               /* MI_NOOP */
+    dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR0+4 (hi) = 0 */
+    dst[n++] = gpr0 + 4;
+    dst[n++] = 0;
     dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR0 = A */
     dst[n++] = gpr0;
     dst[n++] = operandA;
+    dst[n++] = 0;                               /* MI_NOOP */
+    dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR1+4 (hi) = 0 */
+    dst[n++] = gpr1 + 4;
+    dst[n++] = 0;
     dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR1 = B */
     dst[n++] = gpr1;
     dst[n++] = operandB;

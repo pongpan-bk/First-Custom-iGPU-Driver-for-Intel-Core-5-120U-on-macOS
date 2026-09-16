@@ -83,6 +83,18 @@
 #define RING_PP_DIR_BASE_OFFSET     0x228   /* PPGTT Directory Base Address */
 #define RING_MODE_GEN7_OFFSET       0x29C   /* Gen7+ Ring Mode (PPGTT Enable) */
 
+/* Per-engine power/forcewake — Windows igdkmdn64.sys 32.0.101.5972 mining
+ * (raw 0x3EC783/0x45D837 refs): BCS RC6-exit WA polls RING_PSMI_CTL
+ * (base+0x50) bit16=FW_WAIT with mask 0x10000 and asserts per-engine
+ * FORCEWAKE (base+0xA8)/ACK (base+0xAC) — the blitter domain, distinct from
+ * the global FORCEWAKE_GT(0xA188)/RENDER(0xA278) the kext already wakes. */
+#define RING_PSMI_CTL_OFFSET        0x50    /* RING_PSMI_CTL(base) = base + 0x50 */
+#define PSMI_CTL_FORCE_WAKE         (1U << 8)   /* bit8 force-wake request */
+#define PSMI_CTL_RC6_EXIT_LATENCY   ((0x1Fu) << 1) /* bits5:1 RC6 exit latency */
+#define PSMI_CTL_FW_WAIT            (1U << 16)  /* bit16 force-wake wait in progress */
+#define RING_FORCEWAKE_OFFSET       0xA8    /* per-engine forcewake request */
+#define RING_FORCEWAKE_ACK_OFFSET   0xAC    /* per-engine forcewake acknowledge */
+
 /* Engine reset handshake register — i915 gt/intel_engine_regs.h RING_RESET_CTL
  * (masked register: bit31:16 = write mask, bit15:0 = data — i915 uses
  * REG_MASKED_FIELD_ENABLE(x) = (x<<16)|x and REG_MASKED_FIELD_DISABLE(x) = (x<<16)|0) */
@@ -150,42 +162,40 @@
 
 /*
  * ─────────────────────────────────────────────
- *  LRC (Logical Ring Context) image — Gen12 RCS
+ *  LRC (Logical Ring Context) image — Gen12 FULL (RCS + XCS engines)
  * ─────────────────────────────────────────────
- *  i915 intel_lrc_reg.h / intel_lrc.c. The context object is 4 pages:
- *  page 0 = PPHWSP (full 4KB), register state starts at LRC_STATE_OFFSET
- *  = LRC_STATE_PN(1) * PAGE_SIZE = 0x1000 (mainline intel_lrc.h:27).
- *  The state is a mini batch of MI_LOAD_REGISTER_IMM commands; dword 0 of the
- *  state MUST be MI_NOOP before the first MI_LRI (intel_gpu_commands.h:149).
- *  Layout = gen12_rcs_offsets verbatim (intel_lrc.c:455-549), 185 dwords:
- *    dw  0       : MI_NOOP
- *    dw  1-27    : LRI(13,POSTED)  0x244 0x034 0x030 0x038 0x03c 0x168
- *                  0x140 0x110 0x1c0 0x1c4 0x1c8 0x180 0x2b4
- *    dw  28-32   : NOP(5)
- *    dw  33-51   : LRI(9,POSTED)   0x3a8 0x28c 0x288 0x284 0x280 0x27c
- *                  0x278 0x274 0x270   ← PDP3..PDP0 (PDP0 = PML4, 4-level)
- *    dw  52-58   : LRI(3,POSTED)   0x1b0 0x5a8 0x5ac
- *    dw  59-64   : NOP(6)
- *    dw  65-67   : LRI(1, flags=0) 0x0c8   ← NOT posted (no FORCE_POSTED)
- *    dw  68-80   : NOP(13)
- *    dw  81-183  : LRI(51,POSTED)  0x588 x6, 0x028 0x09c 0x0c0 0x178 0x17c
- *                  0x358 0x170 0x150 0x154 0x158 0x41c, 0x600..0x67c, 0x068 0x084
- *    dw  184     : MI_NOOP
- *  Value-slot dword indices (= i915 CTX_* = bspec off + 1) — see defines below.
+ *  i915 intel_lrc_reg.h / intel_lrc.c. The context object is 6 pages (24KB):
+ *  page 0 = PPHWSP (full 4KB)
+ *  page 1 = RCS  register state (4KB)  — LRC_STATE_DWORDS (185 dwords)
+ *  page 2 = VCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
+ *  page 3 = VECS register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
+ *  page 4 = BCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
+ *  page 5 = CCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
+ *  Total = 6 pages = 24KB (0x6000)
  */
 #define LRC_STATE_OFFSET        0x1000          /* = LRC_STATE_PN(1) * PAGE_SIZE */
-#define LRC_CONTEXT_SIZE        0x4000          /* 4 pages — gen12 RCS context_size (PPHWSP+state) */
+#define LRC_CONTEXT_SIZE        0x6000          /* 6 pages — full Gen12 LRC (PPHWSP + RCS + VCS + VECS + BCS + CCS) */
 #define LRC_STATE_DWORDS        185             /* gen12_rcs_offsets total (dw 0..184) */
-
-/* XCS (BCS/VCS/VECS) context state size — gen12_xcs_offsets total (52 dw):
- *   dw 0       : MI_NOOP
- *   dw 1-27    : LRI(13,POSTED)  identical to RCS block 1 (0x244..0x2b4)
- *   dw 28-32   : NOP(5)
- *   dw 33-51   : LRI(9,POSTED)   identical to RCS block 2 (0x3a8 + PDP3..PDP0)
- * No blocks 3-5 (no indirect-ctx regs, no R_PWR_CLK_STATE, no GPR block).
- * CTX_* value-slot indices are therefore the SAME as RCS for blocks 1-2
- * (0x03..0x33) — lrcUpdateRingRegs() + lrcAllocPPGTT() patch them unchanged. */
 #define LRC_STATE_DWORDS_XCS    52              /* gen12_xcs_offsets total (dw 0..51) */
+
+#define LRC_STATE_PN(engine)    (engine)        /* page number for engine: 1=RCS, 2=VCS, 3=VECS, 4=BCS, 5=CCS */
+#define LRC_STATE_OFFSET_PN(pn) ((pn) * PAGE_SIZE)
+
+/* LRC context offsets per engine (page-aligned) */
+#define LRC_RCS_OFFSET          LRC_STATE_OFFSET_PN(1)  /* 0x1000 */
+#define LRC_VCS_OFFSET          LRC_STATE_OFFSET_PN(2)  /* 0x2000 */
+#define LRC_VECS_OFFSET         LRC_STATE_OFFSET_PN(3)  /* 0x3000 */
+#define LRC_BCS_OFFSET          LRC_STATE_OFFSET_PN(4)  /* 0x4000 */
+#define LRC_CCS_OFFSET          LRC_STATE_OFFSET_PN(5)  /* 0x5000 */
+
+/* Engine types for LRC context building */
+enum {
+    kMyIntelLrcEngineRCS  = 1,
+    kMyIntelLrcEngineVCS  = 2,
+    kMyIntelLrcEngineVECS = 3,
+    kMyIntelLrcEngineBCS  = 4,
+    kMyIntelLrcEngineCCS  = 5,
+};
 
 /* Value-slot dword indices (= i915 CTX_* intel_lrc_reg.h = bspec off + 1).
  * Block 1 (dw 1-27): */
@@ -988,5 +998,15 @@ bool lrcMapBatchPages(MyIntelRing *ring, uint32_t batchGGTT,
  * @return true = success
  */
 bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va);
+
+/*!
+ * @brief  Build XCS (VCS/VECS/BCS/CCS) context at a specific LRC page offset.
+ *         All XCS engines share the same 52-dword layout (gen12_xcs_offsets).
+ *
+ * @param ring        Ring object
+ * @param pageOffset  Page offset in LRC context image (e.g., LRC_VCS_OFFSET)
+ * @return true = success
+ */
+bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset);
 
 #endif /* __MY_INTEL_RING_HPP__ */

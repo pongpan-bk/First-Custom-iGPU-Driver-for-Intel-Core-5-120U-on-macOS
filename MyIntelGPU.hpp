@@ -31,6 +31,7 @@
 
 /* Phase 5 — GEM Buffer + Ring Buffer includes */
 #include "MyIntelGEMBuffer.hpp"
+#include "MyIntelVCS.h"
 
 /* 2.0.224: early-boot progress marker. Written to NVRAM + IOLog at every
  * startup phase so a hard-locked boot (myintelfb=1, hangs before logd)
@@ -41,6 +42,7 @@ extern void mygpuProgress(const char *tag);
 /* Forward declaration for ring struct — full definition in MyIntelRing.hpp */
 struct MyIntelRing;
 struct MyIntelRingCallbacks;
+class MyIntelVCSClient;
 
 #pragma mark - Constants & Register Offsets
 
@@ -238,6 +240,11 @@ enum {
 #define kMinKernelVA            0xFFFFFF80000000ULL
 #define kMaxKernelVA            0xFFFFFFFFFFFFFFFFULL
 
+/* v3.3.4: fEngineLock canary magic — see getEngineLock() in the class body.
+ * Distinct values so a short/overlapping corruption is caught on both sides. */
+#define MYINTEL_ENGINE_LOCK_MAGIC_BEFORE 0x454C4365u  /* "ELCe" — before-side canary */
+#define MYINTEL_ENGINE_LOCK_MAGIC_AFTER  0x6C4F636Bu  /* "lOCk" — after-side canary */
+
 /*
  * Register Offsets
  */
@@ -252,11 +259,40 @@ enum {
 #endif
 
 #define GEN11_GT_INTR_DW0   0x44074    /* GT Interrupt DW0 (shared) */
-#define ENGINE_TAIL_REG      0x80      /* Ring Tail Register offset
- ( engine base) */
-#define ENGINE_HEAD_REG      0x34      /* Ring Head Register offset */
-#define ENGINE_CTL_REG       0x3C      /* Ring Control Register offset */
-#define ENGINE_START_REG     0x38      /* Ring Start (Base Address) */
+#define GEN11_RENDER_COPY_INTR_ENABLE 0x190030
+#define GEN11_VCS_VECS_INTR_ENABLE     0x190034
+#define GEN11_RCS0_RSVD_INTR_MASK      0x190090
+#define GEN11_BCS_RSVD_INTR_MASK       0x1900A0
+#define GEN11_VCS0_VCS1_INTR_MASK      0x1900A8
+#define GEN11_VCS2_VCS3_INTR_MASK      0x1900AC
+#define GEN11_VECS0_VECS1_INTR_MASK    0x1900D0
+#define GEN11_GFX_MSTR_IRQ            0x190010
+
+/* Gen11+ SQR / Execlist Submission */
+#define RING_EXECLIST_SQ_CONTENTS_OFF  0x510
+#define RING_EXECLIST_CONTROL_OFF      0x550
+#define EL_CTRL_LOAD                   (1U << 0)
+
+/* Forcewake (Gen12/RPL) */
+#define FORCEWAKE_RENDER_GEN9           0xA278
+#define FORCEWAKE_MEDIA_GEN9            0xA270
+#define FORCEWAKE_ACK_RENDER_GEN9       0xD84
+#define FORCEWAKE_ACK_MEDIA_GEN9       0xD88
+#define FORCEWAKE_MT                    0xA188
+#define FORCEWAKE                     0xA18C
+#define FORCEWAKE_KERNEL               (1U << 0)
+#define FORCEWAKE_KERNEL_FALLBACK       (1U << 1)
+
+/* Power Well (Gen9+) */
+#define GEN9_PG_ENABLE                   0xA210
+#define GEN9_RENDER_PG_ENABLE            (1U << 0)
+#define GEN9_MEDIA_PG_ENABLE             (1U << 1)
+#define GEN9_PWRGT_DOMAIN_STATUS         0xA2A0
+
+/* RING_CTL additional bits */
+#define RING_WAIT                        (1U << 11)
+#define RING_WAIT_SEMAPHORE              (1U << 10)
+#define RING_NR_PAGES_MASK               0x001FF000
 
 #define GFX_FLSH_CNTL_GEN6  0x101008  /* GGTT TLB Invalidate Register
                                            VERIFIED i915 gt/intel_gt_regs.h:1475
@@ -433,9 +469,12 @@ class MyIntelGPU : public IOService {
      * to private GGTT/aperture members (fGsm, fGttTotal, fApertureVA,
      * fApertureSize) to service GEM alloc/map selectors.
      */
+    friend class MyIntelGPUClient;
     friend class MyIntelFramebuffer;
     friend class MyIntelAccelClient;
     friend class MyIntelAccelerator;
+    /* v3.3.4: VCS client walks provider rings + canary-guarded engine lock */
+    friend class MyIntelVCSClient;
 
 public:
 
@@ -488,6 +527,15 @@ public:
      */
     virtual void free() override;
 
+    /*!
+ * @brief Create IOUserClient bridge (IOServiceOpen handler)
+     *
+     * Called by IOKit when a user-space process calls IOServiceOpen().
+     * Returns a new MyIntelGPUClient for selector-based GEM alloc/map.
+     */
+    virtual IOReturn newUserClient(task_t resettingTask, void * securityID,
+                                   UInt32 type, OSDictionary * properties,
+                                   IOUserClient ** handler) override;
 
     /*
      * ─────────────────────────────────────
@@ -576,6 +624,11 @@ public:
      *   (Writing 0 = no-op — EN bit must be set.)
      */
     virtual void ggttInvalidate(void);
+
+    /*! @brief Static trampoline for GGTTInvalidateFunc (invalidate-by-contract
+     *  in gemBufferBindToGGTT/UnbindFromGGTT/Destroy). Casts context back to
+     *  MyIntelGPU* and runs the full ggttInvalidate() protocol. */
+    static void ggttInvalidateTrampoline(void *context);
 
     /*!
      * @brief  GGTT Hardware Init (Gen8+)
@@ -668,6 +721,15 @@ public:
     static IOReturn sDelayedDumpArmAction(OSObject *owner, void *arg0,
                                           void *arg1, void *arg2, void *arg3);
     static void sDelayedDumpTimerFired(OSObject *owner, IOTimerEventSource *sender);
+
+    /* Step A (vblank feed): synthetic 60Hz vblank ticker — drives
+     * MyIntelFramebuffer::handleVblank() via notifyVblank() so the
+     * frame counter runs (>0) without depending on the HW display
+     * interrupt that never fires on this Gen12 RPL path. Armed at the
+     * end of the deferred FB start, recurring every 16 ms. */
+    virtual void armVblankTicker(void);
+    virtual void vblankTimerFired(IOTimerEventSource *sender);
+    static void sVblankTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
     /* Phase 5d hang fix (2.0.212) — deferred framebuffer start.
      * start()/registerService()/safeInitInterrupts() run on the workloop
@@ -857,7 +919,22 @@ public:
      *         racing IRQ kick — the one-shot gate makes both equal)
      * @return kIOReturnNotReady accel/ring not initialized
      */
+    kern_return_t submitClientTaskViaRing(uint32_t taskType, uint64_t packetData);
+
+    /*!
+ * @brief Legacy API — redirects to internal implementation (F8 compatibility)
+ * @param batchBuffer Unused (kept for API compatibility)
+ * @param taskType   Task type
+ * @param packetData Opaque data
+ * @return kIOReturnSuccess on success, error code on failure
+ */
     kern_return_t submitClientTaskViaRing(void *batchBuffer, uint32_t taskType, uint64_t packetData);
+
+    /*!
+ * @brief Cleanup completed in-flight batches by checking HWSP breadcrumb
+ * @param ring Ring to check for completed seqnos
+ */
+    void cleanupInFlightBatches(MyIntelRing *ring);
 
     /*!
  * @brief Entry point for GT engine interrupt dispatch
@@ -943,6 +1020,10 @@ public:
 
     MyIntelRing *getRingRCS(void) const { return fRingRCS; }
     MyIntelRing *getRingBCS(void) const { return fRingBCS; }
+    MyIntelRing *getVCSRing(void) const { return fRingVCS; }
+    /* 2.0.255: drop all queued-but-dead batches after an engine reset
+     * (takes fEngineLock internally; call with no lock held). */
+    void vcsFlushPendingQueue(void);
     MyIntelRingCallbacks *getRingCallbacks(void) const { return fRingCallbacks; }
     volatile uint8_t *getApertureVA(void) const { return fApertureVA; }
 
@@ -1013,8 +1094,12 @@ private:
     bool                     fPlaneSnapshotValid; /*!< true after snapshotDisplayState() */
     IOTimerEventSource      *fDelayedDumpTimer;   /*!< t+10s dump + alive ticks (recurring) */
     IOTimerEventSource      *fFramebufferStartTimer; /*!< deferred FB start (t+1s, workloop) */
-    IOTimerEventSource      *fEdidTimer;           /*!< EDID passthrough retry (2s x45) */
-    int                      fEdidRetries;
+    IOTimerEventSource      *fVblankTimer;        /*!< Step A: synthetic 60Hz vblank ticker */
+    uint32_t                 fVblankTick;         /*!< Step A: tick count (diag) */
+    IOTimerEventSource      *fEdidTimer;           /*!< EDID passthrough retry loop: first fire t+1s, re-arm every 2s up to 45 tries */
+    static const uint32_t    kEdidMaxRetries = 90; /*!< max EDID injection attempts (0.5s interval => 45s window) */
+    uint32_t                 fEdidRetries;         /*!< EDID retry counter (reset on arm, capped at kEdidMaxRetries) */
+    bool                     fEdidDebug;           /*!< myedidbg=1: emit [EDID] logs (else silent) */
     bool                     injectEDIDOnce(void);
     static void              sEdidTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void                     armEDIDPassthrough(void);
@@ -1059,6 +1144,7 @@ private:
     bool                     accelPadProps(void);   /*!< Door-A: eGPU-trick property injection */
     /* Hypothesis #10: BCS blit as BATCH+BB_START (proven VDBOX/gem_test pattern) */
     MyIntelGEMBuffer        *fAccelBatchBuf;       /*!< blit batch buffer (lazy alloc) */
+    MyIntelGEMBuffer        *fAccelBatchSrcBuf;    /*!< blit source buffer with test pattern (lazy alloc) */
     bool                     accelBatchBlit(void);
     bool                     accelBCSReset(void);  /*!< Hyp#11: GDRST BCS + full reprogram */
     uint32_t                 fAliveTick;          /*!< alive-ticker count (5s per tick) */
@@ -1103,6 +1189,7 @@ private:
     /* Ring Buffer Engines */
     MyIntelRing              *fRingRCS;           /*!< Render Command Streamer ring */
     MyIntelRing              *fRingBCS;           /*!< Blitter Command Streamer ring */
+    MyIntelRing              *fRingVCS;           /*!< Video Command Streamer ring (VCS0) */
 
     /* Ring Callbacks — struct for ringCreate/Submit */
     MyIntelRingCallbacks     *fRingCallbacks;     /*!< Dynamically allocated callbacks */
@@ -1111,14 +1198,44 @@ private:
      *  (Phase 5: just track RCS + BCS ring buffers) */
     MyIntelGEMBuffer         *fGemRingRCS;        /*!< GEM buffer for RCS ring */
     MyIntelGEMBuffer         *fGemRingBCS;        /*!< GEM buffer for BCS ring */
+    MyIntelGEMBuffer         *fGemRingVCS;        /*!< GEM buffer for VCS ring */
 
     /* Phase 5 init state */
     bool                      fAccelInitialized;  /*!< true after initHardwareAcceleration() */
 
     /* Engine kick lock — serializes kickCommandSet2() between the IRQ
      * workloop thread and client (IOUserClient) threads. Non-recursive
-     * IOLock: the public wrapper is the ONLY lock site; never nest. */
-    IOLock                   *fEngineLock;        /*!< NULL until start() */
+     * IOLock: the public wrapper is the ONLY lock site; never nest.
+     *
+     * v3.3.4: the lock is NEVER freed during the kext lifetime (stop()/
+     * free() only NULL-log it) — a freed lock re-enters the zone and a
+     * concurrently-walking IRQ/client thread can read a recycled (garbage)
+     * pointer → GPF (panic: kickCommandSet2 / vcsFlushPendingQueue,
+     * fEngineLock=0xffff01aa…). Canaries + canonical-address check let
+     * getEngineLock() detect corruption and fail safe with NULL. */
+     uint32_t                  fEngineLockCanaryBefore;  /*!< MYINTEL_ENGINE_LOCK_MAGIC_BEFORE */
+    uint32_t                  _engineLockPad0;          /*!< explicit pad to keep fEngineLock 8-byte aligned */
+    IOLock                   *fEngineLock;              /*!< valid until kext unload */
+    uint64_t                  fEngineLockCanaryAfter;   /*!< MYINTEL_ENGINE_LOCK_MAGIC_AFTER (64-bit guard) */
+    uint32_t                  _engineLockPad1;          /*!< guard pad */
+
+    /* v3.3.4: validated accessor — returns NULL on canary mismatch or a
+     * non-canonical pointer instead of handing a garbage lock to IOLock*. */
+    IOLock *getEngineLock(void) const {
+        if (fEngineLockCanaryBefore != MYINTEL_ENGINE_LOCK_MAGIC_BEFORE ||
+            (uint32_t)fEngineLockCanaryAfter  != MYINTEL_ENGINE_LOCK_MAGIC_AFTER  ||
+            ((uintptr_t)fEngineLock >> 48) != 0xFFFF) {
+            IOLog("MyIntelGPU: getEngineLock() — CORRUPT (before=0x%08X lock=%p after=0x%08X) → NULL\n",
+                  fEngineLockCanaryBefore, fEngineLock, (uint32_t)fEngineLockCanaryAfter);
+            return NULL;
+        }
+        return fEngineLock;
+    }
+
+    /* v3.3.4: stop() in progress — client entry points (engineReset,
+     * externalMethod dispatch) return kIOReturnNotReady instead of
+     * walking a partially-torn-down provider. */
+    bool isStopping(void) const { return fStopping; }
 
     /*
      * ─────────────────────────────────────
@@ -1143,6 +1260,41 @@ private:
 
     /* Phase 6c — accelerator accessor (NULL unless myintelaccel set) */
     class MyIntelAccelerator *getAccelerator(void) const { return fAccelerator; }
+
+    /*
+     * ─────────────────────────────────────
+     *  Phase 7 — Media Engine Members
+     *  (MyIntelMedia.cpp)
+     * ─────────────────────────────────────
+     */
+    bool     initMediaEngines(void);
+    void     setMediaClockGating(void);
+    void     publishMediaProperties(void);
+    bool     startPhase7Media(void);
+
+    /* Phase 7 state */
+    bool                      fMediaInitialized;     /*!< true after startPhase7Media() */
+    uint32_t                  fVdboxDisableMask;     /*!< GEN11_GT_VEBOX_VDBOX_DISABLE raw */
+    uint32_t                  fActiveVdboxCount;     /*!< number of available VDBOX */
+    uint32_t                  fActiveVeboxCount;     /*!< number of available VEBOX */
+    /* VDBOX instance tracking — max 4 (RPL-P) */
+    /* VEBOX instance tracking — max 2 (RPL-P) */
+    /* These are defined in MyIntelMedia.hpp as opaque structs;
+     * inline arrays here to keep the class layout self-contained. */
+    struct {
+        uint32_t mmioBase;
+        uint32_t sfcBase;
+        uint32_t auxInvReg;
+        uint8_t  index;
+        bool     hasSfc;
+        bool     initialized;
+    } fVdboxInstances[4];
+    struct {
+        uint32_t mmioBase;
+        uint32_t auxInvReg;
+        uint8_t  index;
+        bool     initialized;
+    } fVeboxInstances[2];
 };
 
 #endif /* __MY_INTEL_GPU_HPP__ */

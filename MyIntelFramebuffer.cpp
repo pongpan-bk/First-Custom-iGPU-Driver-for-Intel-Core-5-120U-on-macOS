@@ -141,11 +141,35 @@ bool MyIntelFramebuffer::start(IOService *provider)
     if (oerr == kIOReturnSuccess) {
         OSString *loc = OSString::withCString("0");
         if (loc) { setProperty("ioDisplayLocation", loc); loc->release(); FBLog("ioDisplayLocation=0 on FB"); }
+
+        /* Inject EDID + built-in flag on IODisplayConnect node so macOS
+         * display system reads it directly (not just IOFramebuffer).
+         * This fixes "Unknown Display" on Ventura where the display
+         * pipeline queries IODisplayConnect, not the framebuffer. */
         IORegistryIterator *it = IORegistryIterator::iterateOver(this, gIOServicePlane);
         if (it) {
             IORegistryEntry *ch;
             while ((ch = it->getNextObject())) {
                 if (OSDynamicCast(IODisplayConnect, ch)) {
+                    /* EDID on IODisplayConnect */
+                    OSData *edidDC = OSData::withBytes(gKDB0924_EDID, sizeof(gKDB0924_EDID));
+                    if (edidDC) {
+                        ch->setProperty("IODisplayEDID", edidDC);
+                        edidDC->release();
+                        FBLog("EDID injected on IODisplayConnect node");
+                    }
+                    /* Built-in flag (kIOConnectionBuiltIn = 0x800) — MUST be
+                     * OSData 4-byte form: live dump on this panel showed
+                     * "IODisplayConnectFlags" = <00000000> (OSData), meaning
+                     * the display stack queues the connection flags as OSData
+                     * and our old OSNumber form was ignored/replaced. */
+                    const UInt8 connFlags[] = { 0x00, 0x00, 0x08, 0x00 }; /* 0x800 LE */
+                    OSData *flags = OSData::withBytes(connFlags, sizeof(connFlags));
+                    if (flags) {
+                        ch->setProperty("IODisplayConnectFlags", flags);
+                        flags->release();
+                        FBLog("IODisplayConnectFlags=0x800 (built-in) on display0");
+                    }
                     OSString *l2 = OSString::withCString("0");
                     if (l2) { ch->setProperty("ioDisplayLocation", l2); l2->release(); FBLog("ioDisplayLocation=0 on display0"); }
                     break;
@@ -186,13 +210,24 @@ void MyIntelFramebuffer::locationTimerFired(OSObject *owner, IOTimerEventSource 
         IORegistryEntry *ch;
         while ((ch = it->getNextObject())) {
             if (OSDynamicCast(IODisplayConnect, ch)) {
-                {
-                    OSNumber *flagsNum = OSNumber::withNumber((unsigned long long)0, 32);
-                    if (flagsNum) {
-                        ch->setProperty("IODisplayConnectFlags", flagsNum);
-                        flagsNum->release();
+                OSData *edidCheck = OSDynamicCast(OSData, ch->getProperty("IODisplayEDID"));
+                if (!edidCheck) {
+                    OSData *edidDC = OSData::withBytes(gKDB0924_EDID, sizeof(gKDB0924_EDID));
+                    if (edidDC) {
+                        ch->setProperty("IODisplayEDID", edidDC);
+                        edidDC->release();
+                        IOLog("MyIntelFB: EDID injected on IODisplayConnect (timer retry)\n");
                     }
-                    IOLog("MyIntelFB: IODisplayConnectFlags=0 set on display0 (timer)\n");
+                }
+                const UInt8 connFlagsT[] = { 0x00, 0x00, 0x08, 0x00 }; /* 0x800 LE */
+                OSData *flagsCheck = OSDynamicCast(OSData, ch->getProperty("IODisplayConnectFlags"));
+                if (!flagsCheck || !flagsCheck->isEqualTo(connFlagsT, sizeof(connFlagsT))) {
+                    OSData *flags = OSData::withBytes(connFlagsT, sizeof(connFlagsT));
+                    if (flags) {
+                        ch->setProperty("IODisplayConnectFlags", flags);
+                        flags->release();
+                        IOLog("MyIntelFB: IODisplayConnectFlags=0x800 (built-in) on display0 (timer)\n");
+                    }
                 }
                 IORegistryIterator *it2 = IORegistryIterator::iterateOver(ch, gIOServicePlane);
                 if (it2) {
@@ -414,8 +449,8 @@ IOReturn MyIntelFramebuffer::getAttributeForConnection(
             return kIOReturnSuccess;
 
         case kConnectionFlags:
-            if (value) *value = kIOConnectionBuiltIn;
-            FBLog("kConnectionFlags -> 0x800 (built-in eDP, was 0x0)");
+            if (value) *value = 0x0;
+            FBLog("kConnectionFlags -> 0x0 (capture task-6 L38-39, was 0x800)");
             return kIOReturnSuccess;
 
         case kConnectionEnable:
