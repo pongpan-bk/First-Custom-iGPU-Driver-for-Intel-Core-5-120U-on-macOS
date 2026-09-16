@@ -43,7 +43,7 @@
 			<key>VRAM,memSize</key>
 			<data>AAAAgAAAAAA=</data>
 			<key>VRAM,totalMB</key>
-			<data>AAAQAAAAAAA=</data>
+			<integer>4096</integer>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
