@@ -55,11 +55,11 @@
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>22.6.0</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>22.6.0</string>
+		<string>23.0.0<</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>22.6.0</string>
+		<string>23.0.0<</string>
 	</dict>
 </dict>
 </plist>
