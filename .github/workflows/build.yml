@@ -1,0 +1,207 @@
+name: Build MyIntelGPU.kext
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (leave empty for auto)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  KEXT_NAME: MyIntelGPU
+  BUNDLE_ID: com.myintelgpu.driver
+
+jobs:
+  build:
+    name: Build Kernel Extension
+    runs-on: macos-14
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download and Setup MacKernelSDK
+      run: |
+        curl -fSL https://github.com/acidanthera/MacKernelSDK/archive/refs/heads/master.tar.gz \
+          -o /tmp/MacKernelSDK.tar.gz
+        mkdir -p "${{ github.workspace }}/MacKernelSDK"
+        tar -xzf /tmp/MacKernelSDK.tar.gz \
+          -C "${{ github.workspace }}/MacKernelSDK" --strip-components=1
+        echo "KERNEL_SDK_DIR=${{ github.workspace }}/MacKernelSDK" >> $GITHUB_ENV
+
+    - name: Download and Setup Lilu
+      run: |
+        # NOTE: Lilu repo has a nested layout - the kext sources (including
+        # Headers/kern_api.hpp) live in Lilu/Lilu/, not at the repo root.
+        git clone --depth 1 https://github.com/acidanthera/Lilu.git "${{ github.workspace }}/Lilu"
+        echo "LILU_DIR=${{ github.workspace }}/Lilu/Lilu" >> $GITHUB_ENV
+        ls -la "${{ github.workspace }}/Lilu/Lilu/Headers/kern_api.hpp"
+
+    - name: Compile Kext via Makefile
+      run: |
+        set -o pipefail
+        make LILU_DIR="${{ github.workspace }}/Lilu/Lilu" \
+             KERNEL_SDK_DIR="${{ github.workspace }}/MacKernelSDK" 2>&1 | tee /tmp/build.log
+
+    - name: Verify Kext Binary Output
+      run: |
+        if [ ! -f "${KEXT_NAME}.kext/Contents/MacOS/${KEXT_NAME}" ]; then
+          echo "❌ Build failed — binary not found"
+          cat /tmp/build.log
+          exit 1
+        fi
+        echo "✅ Build success!"
+        file "${KEXT_NAME}.kext/Contents/MacOS/${KEXT_NAME}"
+        ls -la "${KEXT_NAME}.kext/Contents/MacOS/${KEXT_NAME}"
+
+    - name: Upload Kext to GitHub Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.KEXT_NAME }}.kext
+        path: ${{ env.KEXT_NAME }}.kext/
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Determine Version
+      id: version
+      run: |
+        SHORT_HASH=$(git rev-parse --short HEAD)
+        DATE_TAG=$(date -u +%Y%m%d)
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.release_tag }}" ]; then
+          echo "tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=v3.0.0-${DATE_TAG}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+        fi
+        # pkg version from Info.plist
+        echo "pkgver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ${KEXT_NAME}.kext/Contents/Info.plist)" >> $GITHUB_OUTPUT
+
+    - name: Create ZIP Archive
+      run: |
+        ditto -c -k --sequesterRsrc --keepParent "${KEXT_NAME}.kext" "/tmp/${KEXT_NAME}.kext.zip"
+
+    - name: Create PKG Installer
+      run: |
+        rm -rf /tmp/pkgpayload /tmp/pkgscripts
+        mkdir -p /tmp/pkgpayload/Library/Extensions /tmp/pkgscripts
+        cp -R "${KEXT_NAME}.kext" /tmp/pkgpayload/Library/Extensions/
+        chmod -R 755 /tmp/pkgpayload/Library/Extensions/${KEXT_NAME}.kext
+        cat > /tmp/pkgscripts/postinstall <<'PKE'
+        #!/bin/sh
+        KEXT=/Library/Extensions/MyIntelGPU.kext
+        if [ -d "$KEXT" ]; then
+            chown -R root:wheel "$KEXT"
+            chmod -R 755 "$KEXT"
+            kmutil install --volume-root / --update-all 2>/dev/null || true
+            kextcache -i / 2>/dev/null || true
+            sync
+        fi
+        exit 0
+        PKE
+        chmod 755 /tmp/pkgscripts/postinstall
+        pkgbuild \
+          --root /tmp/pkgpayload \
+          --scripts /tmp/pkgscripts \
+          --identifier com.pongpan-bk.MyIntelGPU \
+          --version "${{ steps.version.outputs.pkgver }}" \
+          --ownership recommended \
+          "/tmp/${KEXT_NAME}-${{ steps.version.outputs.pkgver }}.pkg"
+        ls -la "/tmp/${KEXT_NAME}-${{ steps.version.outputs.pkgver }}.pkg"
+
+    - name: Upload PKG to GitHub Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.KEXT_NAME }}-${{ steps.version.outputs.pkgver }}.pkg
+        path: /tmp/${{ env.KEXT_NAME }}-${{ steps.version.outputs.pkgver }}.pkg
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        name: "${{ env.KEXT_NAME }} ${{ steps.version.outputs.tag }}"
+        body: |
+          ## ${{ env.KEXT_NAME }}.kext — Automated Build
+
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.ref_name }}
+          **Build Date:** $(date -u)
+
+          ###  Included
+          - `${{ env.KEXT_NAME }}.kext.zip` — kernel extension (folder, for OpenCore/EFI)
+          - `${{ env.KEXT_NAME }}-${{ steps.version.outputs.pkgver }}.pkg` — installer (for /Library/Extensions)
+
+          ### Installation — PKG
+          1. Open `${{ env.KEXT_NAME }}-${{ steps.version.outputs.pkgver }}.pkg`
+          2. Run installer (rebuilds kext collection via kmutil automatically)
+          3. Reboot
+
+          ### Installation — Manual
+          1. Extract `${{ env.KEXT_NAME }}.kext.zip`
+          2. Copy to EFI/OC/Kexts/ or /Library/Extensions/
+          3. In terminal:
+             ```bash
+             sudo chown -R root:wheel ${{ env.KEXT_NAME }}.kext
+             sudo kextutil -v ${{ env.KEXT_NAME }}.kext
+             ```
+
+          ### Hardware Support
+          - Intel Alder Lake-P (0x46A0, 0x46A1, 0x46A6, 0x46B0, 0x46B1)
+          - Intel Raptor Lake-P/U (0xA7A0, 0xA7A1, 0xA7A8, 0xA7A9, 0xA7AA, 0xA7AC)
+
+          ### Notes
+          - Requires macOS 11+ (Big Sur or later)
+          - FakeID: Alder Lake/Raptor Lake → Coffee Lake
+          - Display: DPLL + eDP panel + backlight init
+          - Tested on Core 5 120U (RPL-U)
+        files: |
+          /tmp/${{ env.KEXT_NAME }}.kext.zip
+          /tmp/${{ env.KEXT_NAME }}-${{ steps.version.outputs.pkgver }}.pkg
+        fail_on_unmatched_files: false
+        generate_release_notes: false
+        make_latest: true
+
+    - name: Emit Build Log as Annotation + Step Summary
+      if: always()
+      run: |
+        if [ -f /tmp/build.log ]; then
+          # Write full build log to step summary (always visible on summary page)
+          {
+            echo "## Build Log"
+            echo ""
+            echo '```'
+            cat /tmp/build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Emit each line as annotation (limited visibility but quick overview)
+          while IFS= read -r line; do
+            # Truncate long lines to avoid GitHub annotation length limits
+            truncated="${line:0:1000}"
+            case "$truncated" in
+              *"error:"*)
+                echo "::error title=Build::$truncated"
+                ;;
+              *"warning:"*)
+                echo "::warning title=Build::$truncated"
+                ;;
+              *)
+                echo "::warning title=Build::$truncated"
+                ;;
+            esac
+          done < /tmp/build.log
+        else
+          echo "(no build log file found)" >> "$GITHUB_STEP_SUMMARY"
+        fi
