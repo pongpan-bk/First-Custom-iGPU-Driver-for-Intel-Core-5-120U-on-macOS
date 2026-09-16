@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -27,19 +27,23 @@
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
 			<key>IOMatchCategory</key>
-			<string>IOAccelerator</string>
+			<string>IOFramebuffer</string>
 			<key>IOPCIMatch</key>
 			<string>0x8086 0xA7AC 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
-			<integer>100000</integer>
+<integer>100000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>AAAAAA==</data>
 			<key>MetalStatisticsName</key>
-			<string>Integrated GPU</string>
+<string>Integrated GPU - Raptor Lake-P</string>
 			<key>model</key>
 			<string>Intel Iris Xe 80EU</string>
+			<key>VRAM,memSize</key>
+			<data>AAAAgAAAAAA=</data>
+			<key>VRAM,totalMB</key>
+			<integer>4096</integer>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
