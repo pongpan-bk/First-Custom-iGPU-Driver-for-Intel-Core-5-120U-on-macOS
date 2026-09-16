@@ -57,9 +57,9 @@
 		<key>com.apple.kpi.bsd</key>
 		<string>23.0.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>23.0.0<</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>23.0.0<</string>
+		<string>23.0.0</string>
 	</dict>
 </dict>
 </plist>
