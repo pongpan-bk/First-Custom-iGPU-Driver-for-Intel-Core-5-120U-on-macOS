@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -27,11 +27,11 @@
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
 			<key>IOMatchCategory</key>
-			<string>IOAccelerator</string>
+			<string>IOFramebuffer</string>
 			<key>IOPCIMatch</key>
 			<string>0xa7ac8086 0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0x46a88086</string>
 			<key>IOProbeScore</key>
-			<integer>2000</integer>
+			<integer>6000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
@@ -39,7 +39,12 @@
 			<key>MetalStatisticsName</key>
 			<string>Raptor Lake-P</string>
 			<key>model</key>
-			<string>Integrated GPU</string>
+			<string>Intel Iris Xe Graphics</string>
+			<!-- ใส่ค่า VRAM 2048MB (2GB) แบบ Data Hex ที่แปลงให้เรียบร้อยแล้ว -->
+			<key>VRAM,memSize</key>
+			<data>AAAAYAAAAAA=</data>
+			<key>VRAM,totalMB</key>
+			<data>AAAIAAAAAAA=</data>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
