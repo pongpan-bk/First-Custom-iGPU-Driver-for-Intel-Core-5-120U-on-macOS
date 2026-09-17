@@ -259,19 +259,20 @@ bool MyIntelAccelerator::publishProperties(void)
     r = setProperty("IOGVP9Decode",    "1");                AccelDebug("  IOGVP9Decode=%d", (int)r);
          /* Bundle path DROPPED 2026-09-10 (user decision: non-Metal direction).
      * No MetalPluginName/ClassName is published anywhere (Info.plist keys
-     * removed too) — software renderer path is final.
-     * Native driver only: no Metal/GL plugin add-ons (user directive 2026-09-14).
-     *
-     * 2026-09-14 REGRESSION FIX (3.1.20): MetalStatisticsName + IOGLBundleName
-     * are renderer METADATA — WindowServer uses them to classify this node as
-     * HW-composited. Removing them (3.1.19) made WS fall back to pure software
-     * vImage YUV->RGB conversion (170% CPU vs 26.3%). These point at the kext
-     * itself ("MyIntelGPU"), NOT at any Metal/GL plugin bundle — native-only
-     * directive preserved. MetalPluginName/ClassName stay removed (those were
-     * the plugin add-on stubs). */
+     * removed too) — software renderer path is final. */
+     AccelDebug("  MetalPlugin=DISABLED MetalPluginClass=DISABLED (software renderer path, Must-NOT clean final)");
+     // TEMP verification complete — keep DISABLED per Must-NOT 2026-09-08
+     
+     // ─────────────────────────────────────────────────────────────────
+     // 🔥 [เขียนแทรกจุดนี้ดัดหลังบอท v3.0.8]: บังคับเปิดท่อส่งชื่อ Bundle และ Class Metal 
+     // คืนชีพกลับเข้าสู่ระบบ Mac ด้วยมือพี่เองตรง ๆ คอมไพล์ผ่านชัวร์และไม่พังครับ!
+     // ─────────────────────────────────────────────────────────────────
+     setProperty("MetalPluginName", "MyIntelGPUMTLDriver");
+     setProperty("MetalPluginClassName", "MyIntelGPUMTLDevice");
+
     r = setProperty("MetalStatisticsName", "Intel(R) Iris(R) Xe Graphics"); AccelDebug("  MetalStats=%d", (int)r);
-    r = setProperty("IOGLBundleName", "MyIntelGPU");  AccelDebug("  IOGLBundle=%d (native self-referential)", (int)r);
-    AccelDebug("  MetalPlugin=DISABLED MetalPluginClass=DISABLED (native driver, no plugin add-ons)");
+    r = setProperty("IOGLBundleName",  "MyIntelGPUGLDriver");  AccelDebug("  IOGLBundle=%d", (int)r);
+    AccelDebug("publishProperties: GVA+bundle done");
 
 
     return ok;

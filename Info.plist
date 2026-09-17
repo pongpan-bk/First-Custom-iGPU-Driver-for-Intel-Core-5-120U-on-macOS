@@ -28,14 +28,18 @@
 			<string>MyIntelGPU</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
 			<key>IOPCIMatch</key>
 			<string>0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
-			<integer>100000</integer>
+			<integer>9999</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
-			<data>CAAAAA==</data>
+			<data>
+			AAAAAA==
+			</data>
 			<key>MetalStatisticsName</key>
 			<string>Intel® Graphics</string>
 			<key>model</key>

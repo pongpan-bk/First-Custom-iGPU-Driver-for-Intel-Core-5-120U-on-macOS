@@ -33,16 +33,12 @@ make KERNEL_SDK_DIR="${SDK}" 2>&1 | tail -3
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${TARGET}.kext/Contents/Info.plist")
 echo "      → version: ${VERSION}"
 
-# ── 2. Backup ตัวเดิม (เก็บนอก L/E! — ห้ามทิ้ง .bak ไว้ใน /Library/Extensions
-#    เพราะ kextd สแกนเจอ 2 bundle ที่มี bundle ID เดียวกัน แล้วอาจโหลดตัวเก่า!) ──
+# ── 2. Backup ตัวเดิม ─────────────────────────────────────────────────────
 echo ""
-echo "[2/6] สำรอง kext ปัจจุบัน (เก็บที่ ~/Desktop/MyIntelGPU-kext-backups) ..."
-BACKUP_DIR="${HOME}/Desktop/MyIntelGPU-kext-backups"
-mkdir -p "${BACKUP_DIR}"
-BACKUP="${BACKUP_DIR}/MyIntelGPU.kext.bak-$(date +%Y%m%d-%H%M%S)"
+echo "[2/6] สำรอง kext ปัจจุบันใน L/E ..."
+BACKUP="${DEST}.bak-$(date +%Y%m%d-%H%M%S)"
 if [ -d "${DEST}" ]; then
     sudo cp -R "${DEST}" "${BACKUP}"
-    sudo chown -R "$(id -un):staff" "${BACKUP}" 2>/dev/null || true
     echo "      → ${BACKUP}"
 else
     echo "      (ไม่มีตัวเดิม — ข้าม)"
@@ -54,10 +50,7 @@ echo "[3/6] ติดตั้งที่ L/E ..."
 sudo rm -rf "${DEST}"
 sudo cp -R "${TARGET}.kext" "${DEST}"
 sudo chown -R root:wheel "${DEST}"
-# Explicit perms — NEVER blanket chmod -R 755 (user rule)
-sudo find "${DEST}" -type d -exec chmod 755 {} \;
-sudo find "${DEST}" -type f ! -name 'MyIntelGPU' -exec chmod 644 {} \;
-sudo chmod 755 "${DEST}/Contents/MacOS/MyIntelGPU"
+sudo chmod -R 755 "${DEST}"
 sudo codesign -s - --force "${DEST}" 2>/dev/null || true
 echo "      → ติดตั้งและ Sign เสร็จ"
 

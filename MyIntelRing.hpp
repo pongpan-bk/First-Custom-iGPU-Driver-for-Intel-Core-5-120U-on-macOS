@@ -83,18 +83,6 @@
 #define RING_PP_DIR_BASE_OFFSET     0x228   /* PPGTT Directory Base Address */
 #define RING_MODE_GEN7_OFFSET       0x29C   /* Gen7+ Ring Mode (PPGTT Enable) */
 
-/* Per-engine power/forcewake — Windows igdkmdn64.sys 32.0.101.5972 mining
- * (raw 0x3EC783/0x45D837 refs): BCS RC6-exit WA polls RING_PSMI_CTL
- * (base+0x50) bit16=FW_WAIT with mask 0x10000 and asserts per-engine
- * FORCEWAKE (base+0xA8)/ACK (base+0xAC) — the blitter domain, distinct from
- * the global FORCEWAKE_GT(0xA188)/RENDER(0xA278) the kext already wakes. */
-#define RING_PSMI_CTL_OFFSET        0x50    /* RING_PSMI_CTL(base) = base + 0x50 */
-#define PSMI_CTL_FORCE_WAKE         (1U << 8)   /* bit8 force-wake request */
-#define PSMI_CTL_RC6_EXIT_LATENCY   ((0x1Fu) << 1) /* bits5:1 RC6 exit latency */
-#define PSMI_CTL_FW_WAIT            (1U << 16)  /* bit16 force-wake wait in progress */
-#define RING_FORCEWAKE_OFFSET       0xA8    /* per-engine forcewake request */
-#define RING_FORCEWAKE_ACK_OFFSET   0xAC    /* per-engine forcewake acknowledge */
-
 /* Engine reset handshake register — i915 gt/intel_engine_regs.h RING_RESET_CTL
  * (masked register: bit31:16 = write mask, bit15:0 = data — i915 uses
  * REG_MASKED_FIELD_ENABLE(x) = (x<<16)|x and REG_MASKED_FIELD_DISABLE(x) = (x<<16)|0) */

@@ -259,40 +259,11 @@ enum {
 #endif
 
 #define GEN11_GT_INTR_DW0   0x44074    /* GT Interrupt DW0 (shared) */
-#define GEN11_RENDER_COPY_INTR_ENABLE 0x190030
-#define GEN11_VCS_VECS_INTR_ENABLE     0x190034
-#define GEN11_RCS0_RSVD_INTR_MASK      0x190090
-#define GEN11_BCS_RSVD_INTR_MASK       0x1900A0
-#define GEN11_VCS0_VCS1_INTR_MASK      0x1900A8
-#define GEN11_VCS2_VCS3_INTR_MASK      0x1900AC
-#define GEN11_VECS0_VECS1_INTR_MASK    0x1900D0
-#define GEN11_GFX_MSTR_IRQ            0x190010
-
-/* Gen11+ SQR / Execlist Submission */
-#define RING_EXECLIST_SQ_CONTENTS_OFF  0x510
-#define RING_EXECLIST_CONTROL_OFF      0x550
-#define EL_CTRL_LOAD                   (1U << 0)
-
-/* Forcewake (Gen12/RPL) */
-#define FORCEWAKE_RENDER_GEN9           0xA278
-#define FORCEWAKE_MEDIA_GEN9            0xA270
-#define FORCEWAKE_ACK_RENDER_GEN9       0xD84
-#define FORCEWAKE_ACK_MEDIA_GEN9       0xD88
-#define FORCEWAKE_MT                    0xA188
-#define FORCEWAKE                     0xA18C
-#define FORCEWAKE_KERNEL               (1U << 0)
-#define FORCEWAKE_KERNEL_FALLBACK       (1U << 1)
-
-/* Power Well (Gen9+) */
-#define GEN9_PG_ENABLE                   0xA210
-#define GEN9_RENDER_PG_ENABLE            (1U << 0)
-#define GEN9_MEDIA_PG_ENABLE             (1U << 1)
-#define GEN9_PWRGT_DOMAIN_STATUS         0xA2A0
-
-/* RING_CTL additional bits */
-#define RING_WAIT                        (1U << 11)
-#define RING_WAIT_SEMAPHORE              (1U << 10)
-#define RING_NR_PAGES_MASK               0x001FF000
+#define ENGINE_TAIL_REG      0x80      /* Ring Tail Register offset
+ ( engine base) */
+#define ENGINE_HEAD_REG      0x34      /* Ring Head Register offset */
+#define ENGINE_CTL_REG       0x3C      /* Ring Control Register offset */
+#define ENGINE_START_REG     0x38      /* Ring Start (Base Address) */
 
 #define GFX_FLSH_CNTL_GEN6  0x101008  /* GGTT TLB Invalidate Register
                                            VERIFIED i915 gt/intel_gt_regs.h:1475
@@ -1144,7 +1115,6 @@ private:
     bool                     accelPadProps(void);   /*!< Door-A: eGPU-trick property injection */
     /* Hypothesis #10: BCS blit as BATCH+BB_START (proven VDBOX/gem_test pattern) */
     MyIntelGEMBuffer        *fAccelBatchBuf;       /*!< blit batch buffer (lazy alloc) */
-    MyIntelGEMBuffer        *fAccelBatchSrcBuf;    /*!< blit source buffer with test pattern (lazy alloc) */
     bool                     accelBatchBlit(void);
     bool                     accelBCSReset(void);  /*!< Hyp#11: GDRST BCS + full reprogram */
     uint32_t                 fAliveTick;          /*!< alive-ticker count (5s per tick) */

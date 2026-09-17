@@ -1,58 +1,40 @@
+# source-analysis/ — Deep Source Analysis + ผลขุดสมอง OpenCode
 
-# ⚡ Intel GPU Core Awakening & Hardware VCS Bridge (Gen 10-12)
+> 2026-08-25 · วิเคราะห์โดย Sisyphus (surgical structure-scan method — explore agents timeout ทั้ง 2 รอบจึงทำเอง)
 
-A production-ready, low-level **Hardware Acceleration Bridge** and **Kernel Driver Interface** designed to completely awaken Intel Iris Plus / UHD Graphics (Gen 10-12 architecture) on modern execution environments (macOS 15 Sequoia / Ubuntu 24.04 LTS).
+## รายงานวิเคราะห์ซอร์ส (5 ฉบับ)
 
-This repository isolates the **Core Bridge and Parsing Engine Implementation**, delivering a highly stable Silicon Initialization layout without causing any kernel panics or memory leaks.
+| ไฟล์ | ครอบคลุม |
+|---|---|
+| **01-core-driver.md** | MyIntelGPU class, lifecycle, Phase 0-7 pipeline (mapping i915), BCS tools, boot-args |
+| **02-interrupts-power-mmio.md** | Gen11 master IRQ flow, 2.0.229 per-bit selector fix, RC6/forceWake/S3, BAR strategies, register tables |
+| **03-ring-execlist-ppgtt.md** | ELSP protocol + descriptor encoding, PPGTT 4-level (PTE 0xC3 bug), MI_FLUSH_DW Gen12 verified form, head-tracking truth |
+| **04-vcs-media-decode.md** | VDBOX H.264 pipeline end-to-end, MFX command encoders + QM matrices, DPB rules, userspace contract |
+| **05-display-gem-client-build.md** | UserClient selector table 0-24, GEM/PTE defines, Accelerator surfaces, Makefile flags, plist diff, deploy workflow |
 
----
+## ผลขุดสมอง OpenCode จากไดรฟ์ D: (raw APFS carve)
 
-## 💎 Core Highlights (หมดชุดความแรงดิบ)
+> วันที่: 2026-08-25 · วิธี: raw sector read ผ่าน `\\.\PhysicalDrive0` (ข้าม MacDrive driver ที่พัง)
+> พาร์ติชันเป้าหมาย: P4 offset `402660524032` (~100.91 GiB, GUID `7C3457EF-...` = Apple APFS)
 
-* **Silicon Awakening Success (100% Core Alive)**: Successfully initializes the ring buffer, fully mapping the Hardware Display Engine and registering framebuffers with the OS kernel. 
-* **Dynamic Memory Mapping**: Allocates and coherent-shares **16GB Unified VRAM** directly with the integrated GPU without hitting any aperture limits.
-* **Low-Level VCS/VDBOX Execution**: Commands are pushed directly into the Intel hardware video decoder via optimized MFX bitstream packets.
-* **Advanced H.264 Reference Management**: Rewritten into strict C architecture to handle complex B-slice reference lists dynamically based on Picture Order Count (POC) and `frame_num`.
+## ทำไมต้อง carve
+MacDrive MDAPFS filter ไม่ attach volume → open ไฟล์ตรง fail ทั้งหมด ("A device attached to the system is not functioning")
+แม้ restart service/reboot/mountvol ก็ไม่หาย → อ่าน sector ดิบผ่าน disk device แทน
 
----
+## ไฟล์ในโฟลเดอร์นี้
 
-## 📊 Proven Benchmark Results
+| ไฟล์ | คืออะไร | คุณค่า |
+|---|---|---|
+| **conversations_extract.txt** (12.8MB) | 13,837 ชิ้นข้อความสนทนาจริงจาก OpenCode sessions บนแมค (text parts + Thai) | ⭐ สมองตัวจริง |
+| **messages_harvest.txt** (46MB) | 58,147 records ดิบจาก leaf pages ของ opencode.db (รวม tool calls, sessionID JSON) | ดิบครบกว่า |
+| **sessions_cluster.txt** (3MB) | shell history/carved strings โซน storage | คำสั่ง deploy จริง |
 
-Validated on production test rigs (`Intel Core i5-4590` / `Gigabyte B85M-HD3` / `120Hz Liquid-Smooth Monitor Setup`):
+⚠️ `opencode_recovered.db` ถูกลบทิ้ง — dump ตรงจาก offset `488572096512` (119,712 pages) แต่ APFS COW ทำ pages กระจัดกระจาย → malformed ใช้ไม่ได้ จึงหันไป decode leaf pages ตรงๆ แทน
 
-```text
-[BRIDGE] Parsed SPS: 128x96
-[BRIDGE] Parsed PPS: qpInit=28, scMatrixPresent=0
-[BRIDGE] Slice: type=1 pocLsb=2 frameNum=2 sliceQpDelta=0 numRefL0=1 numRefL1=1 idr=0
-[BRIDGE] Refs: 0=0x41b5000 1=0x41ba000 
-[BRIDGE] Slice: type=1 pocLsb=6 frameNum=3 sliceQpDelta=0 numRefL0=1 numRefL1=1 idr=0
-[BRIDGE] Refs: 0=0x41b5000 1=0x41c9000 
+## วิธีอ่าน conversations_extract.txt
+- แยกบล็อกด้วย `\n\n@@@@\n\n`
+- บล็อกแบบ `{"sessionID":...,"type":"text","text":"..."}` = ข้อความ AI/user จริง
+- ภาษาไทยเป็น UTF-8 ปกติ (Terminal เก่าอาจโชว์ ??? — เปิดด้วย editor UTF-8)
 
-[BENCH] RESULT ok=20 fail=0 avg=2.43ms
-👑 PERFORMANCE: 411.8 FPS (Exceeding 120Hz refresh limits by 3.4x)
-🟢 STATUS: Successfully decoded 20 frames without memory corruption.
-```
-
----
-
-## 🛠️ Software Stack & Build Instructions
-
-The compiler is configured to produce clean, high-performance dynamic binaries, entirely stripped of unstable C++ runtime overheads or legacy lambda wrappers.
-
-```bash
-# Clean up target and compile the Masterpiece binary
-make clean
-make libmyintelvcs.dylib
-
-# Run the raw hardware decoder test pipeline
-DYLD_LIBRARY_PATH=. ./test_decode_save2 test_clip.h264 bridge_decoded.nv12 128 96
-```
-
----
-
-## 🔒 Enterprise & Commercial Licensing Notice
-
-* **Current Status**: **Fully Functional Core Engine**. The silicon initializes stably, handles hardware memory offsets flawlessly, and guarantees a 100% crash-free golden session under high-throughput video workloads.
-* **Integration Scope**: This repository serves as the foundational **Turnkey Framework**. Extended pipe routing configurations (e.g., secondary dual-display output mapping / specific external HDMI connector patches) are left open for the purchasing organization’s engineering team to customize and integrate according to their target product schemas.
-
-**Developed by Pongpan iGPU Tech Labs. All Rights Reserved.**
+## สคริปต์ที่ใช้ (อยู่ที่ `%TEMP%\opencode\`)
+rawscan2.py (signature scan) · carve.py (string carve) · final3.py (SQLite header hunt) · harvest.py (leaf-page record decoder)
