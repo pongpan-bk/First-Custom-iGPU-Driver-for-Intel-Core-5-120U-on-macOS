@@ -15,9 +15,14 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1.26</string>
+	<string>3.1.6</string>
 	<key>CFBundleVersion</key>
-	<string>3.1.4</string>
+	<string>3.1.6</string>
+	
+	<!-- เพิ่ม Bundle นี้ด้วย (สำคัญสำหรับ Metal) -->
+	<key>CFBundleGetInfoString</key>
+	<string>Intel Xe Graphics Driver with Metal Support</string>
+	
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_GPU</key>
@@ -26,36 +31,157 @@
 			<string>com.pongpan-bk.MyIntelGPU</string>
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
-			<key>IOGLBundleName</key>
-			<string>AppleIntelICLGraphicsGLDriver</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
 			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
+			<string>0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
-			<integer>100000</integer>
+			<key>IOVARendererID</key>
+			<data>
+			AAAAAA==
+			</data>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>
 			AAAAAA==
 			</data>
-			<key>MetalPluginName</key>
-			<string>AppleIntelICLGraphicsMTLDriver</string>
+			
+			<!-- ==================== -->
+			<!-- METAL SUPPORT SECTION -->
+			<!-- ==================== -->
+			
+			<!-- Metal Plugin Configuration -->
+			<key>MetalPluginClassName</key>
+			<string>IntelXeMetalPlugin</string>
+			<key>MetalPluginBundleName</key>
+			<string>IntelXeMetal.bundle</string>
+			
+			<!-- Accelerator Types -->
+			<key>IOAccelTypes</key>
+			<array>
+				<string>Metal</string>
+				<string>OpenGL</string>
+				<string>Video</string>
+			</array>
+			<key>IOAccelIndex</key>
+			<integer>0</integer>
+			
+			<!-- Metal Device Info -->
 			<key>MetalStatisticsName</key>
-			<string>Intel Graphics Raptor Lake-U</string>
+			<string>Intel® Iris® Xe Graphics (80EU)</string>
+			<key>MetalDeviceName</key>
+			<string>Intel Iris Xe Graphics</string>
+			<key>MetalDeviceVendor</key>
+			<string>Intel Corporation</string>
+			<key>MetalVersion</key>
+			<string>3.0</string>
+			<key>MetalFeatureSet</key>
+			<string>macOS_GPUFamily2_v1</string>
+			
+			<!-- Metal Capabilities -->
+			<key>MetalMaxTextureSize</key>
+			<integer>16384</integer>
+			<key>MetalMaxBufferLength</key>
+			<integer>1073741824</integer>
+			<key>MetalMaxThreadsPerThreadgroup</key>
+			<integer>1024</integer>
+			<key>MetalMaxColorRenderTargets</key>
+			<integer>8</integer>
+			<key>MetalMaxVertexAttributes</key>
+			<integer>31</integer>
+			
+			<!-- Feature Support Flags -->
+			<key>MetalSupportsRayTracing</key>
+			<true/>
+			<key>MetalSupportsMeshShaders</key>
+			<true/>
+			<key>MetalSupportsTileShaders</key>
+			<true/>
+			<key>MetalSupportsVariableRateShading</key>
+			<true/>
+			<key>MetalSupportsIndirectCommandBuffers</key>
+			<true/>
+			<key>MetalSupportsPrimitiveID</key>
+			<true/>
+			
+			<!-- Video Acceleration Support -->
+			<key>IOVideoTypes</key>
+			<array>
+				<string>H264</string>
+				<string>HEVC</string>
+				<string>VP9</string>
+				<string>AV1</string>
+			</array>
+			<key>IOGVAH264Decode</key>
+			<true/>
+			<key>IOGVAHEVCDecode</key>
+			<true/>
+			<key>IOGVAVP9Decode</key>
+			<true/>
+			<key>IOGVAAV1Decode</key>
+			<true/>
+			
+			<!-- Display Properties -->
 			<key>model</key>
-			<string>Intel Graphics Raptor Lake-U</string>
+			<string>Intel Iris Xe Graphics 80EU (Raptor Lake-P)</string>
+			
+			<!-- GPU Memory Info -->
+			<key>VRAM,totalMB</key>
+			<integer>4096</integer>
+			<key>VRAM,memSize</key>
+			<integer>4294967296</integer>
+			
+			<!-- Performance Properties -->
+			<key>CoreClockMHz</key>
+			<integer>1300</integer>
+			<key>MemoryClockMHz</key>
+			<integer>1600</integer>
+			<key>ShaderCores</key>
+			<integer>80</integer>
+			
+			<!-- Required for Metal Display -->
+			<key>IOGLBundleName</key>
+			<string>MyIntelGPU</string>
+			<key>IOSurfaceSupport</key>
+			<true/>
+			<key>IOSurfaceAccelerator</key>
+			<true/>
 		</dict>
 	</dict>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
+	
+	<!-- ================================= -->
+	<!-- UPDATED LIBRARY DEPENDENCIES -->
+	<!-- ================================= -->
 	<key>OSBundleLibraries</key>
 	<dict>
+		<!-- IOKit Graphics Frameworks -->
 		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>597</string>
+		<string>600.0.0</string>
+		<key>com.apple.iokit.IOAcceleratorFamily2</key>
+		<string>500.0.0</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
-		<string>2.9</string>
+		<string>300.0.0</string>
+		
+		<!-- Metal & Video Frameworks -->
+		<key>com.apple.iokit.IOGraphicsAccelerator2</key>
+		<string>200.0.0</string>
+		<key>com.apple.iokit.IOSurface</key>
+		<string>300.0.0</string>
+		<key>com.apple.iokit.IOSurfaceAccelerator</key>
+		<string>100.0.0</string>
+		
+		<!-- Apple Graphics Control -->
+		<key>com.apple.driver.AppleGraphicsControl</key>
+		<string>200.0.0</string>
+		<key>com.apple.driver.AppleGraphicsDeviceControl</key>
+		<string>200.0.0</string>
+		<key>com.apple.driver.AppleGraphicsPowerManagement</key>
+		<string>200.0.0</string>
+		
+		<!-- Kernel Libraries -->
 		<key>com.apple.kpi.bsd</key>
 		<string>23.0.0</string>
 		<key>com.apple.kpi.iokit</key>
@@ -63,6 +189,26 @@
 		<key>com.apple.kpi.libkern</key>
 		<string>23.0.0</string>
 	</dict>
+	
+	<!-- ================================= -->
+	<!-- ADDITIONAL PROPERTIES -->
+	<!-- ================================= -->
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
+	
+	<key>OSBundleAllowUserLoad</key>
+	<true/>
+	<key>OSBundleRequired</key>
+	<string>Local-Root</string>
+	
+	<!-- สำหรับ Kext Management -->
+	<key>OSBundleCompatibleVersion</key>
+	<string>3.1.0</string>
+	
+	<!-- Security Properties -->
+	<key>OSKextSigningExcludeAll</key>
+	<false/>
+	<key>OSKextExcludeAllPersonalities</key>
+	<false/>
 </dict>
 </plist>
-
