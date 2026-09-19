@@ -1,101 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>IntelXeAccelerator</string>
+    <string>MyIntelGPU</string>
     <key>CFBundleIdentifier</key>
-    <string>com.intel.driver.IntelXeAccelerator</string>
+    <string>com.myintelgpu.driver</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Intel Xe Graphics Accelerator</string>
+    <string>MyIntelGPU</string>
     <key>CFBundlePackageType</key>
     <string>KEXT</string>
     <key>CFBundleShortVersionString</key>
-    <string>3.1.5</string>
+    <string>2.0.240</string>
     <key>CFBundleVersion</key>
-    <string>100</string>
+    <string>240</string>
     
     <key>IOKitPersonalities</key>
     <dict>
-        <key>IntelXeAccelerator</key>
+        <key>MyIntelGPU</key>
         <dict>
             <key>CFBundleIdentifier</key>
-            <string>com.intel.driver.IntelXeAccelerator</string>
+            <string>com.myintelgpu.driver</string>
             <key>IOClass</key>
-            <string>IntelXeAccelerator</string>
+            <string>MyIntelGPU</string>
             <key>IOMatchCategory</key>
-            <string>IOAccelerator</string>
-            <key>IOPCIMatch</key>
-            <string>
-                0x26a78086 0xa9a78086 0xaaa78086 0xaba78086 
-                0x46a88086 0xa7ac8086 0x20a78086 0x21a78086 
-                0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 
-                0xa8a78086 
-            </string>
-            <key>IOProbeScore</key>
-            <integer>50000</integer>
+            <string>MyIntelGPU</string>
             <key>IOProviderClass</key>
             <string>IOPCIDevice</string>
+            <key>IOProbeScore</key>
+            <integer>60000</integer>
             
-            <!-- ใช้ Native Frameworks -->
+            <!-- บังคับจับคู่ฮาร์ดแวร์จริงจาก Log ของพี่: Device 0xA7AC Vendor 0x8086 -->
+            <key>IOPCIMatch</key>
+            <string>0xA7AC8086</string>
+            
+            <!-- เปิดสิทธิ์การส่งท่อคำสั่ง Metal จาก Userspace -->
             <key>IOAccelTypes</key>
             <array>
                 <string>Metal</string>
-                <string>OpenGL</string>
             </array>
             <key>IOAccelIndex</key>
             <integer>0</integer>
-            
-            <!-- Metal Support -->
-            <key>MetalPluginClassName</key>
-            <string>IntelXeMetalPlugin</string>
-            <key>MetalPluginBundleName</key>
-            <string>IntelXeMetal.bundle</string>
-            
-            <!-- Video Acceleration -->
-            <key>IOVideoTypes</key>
-            <array>
-                <string>H264</string>
-                <string>HEVC</string>
-                <string>VP9</string>
-            </array>
-            
-            <!-- GPU Info -->
-            <key>model</key>
-            <string>Intel Iris Xe Graphics (Raptor Lake-P)</string>
-            <key>vendor</key>
-            <string>Intel Corporation</string>
-            <key>device-id</key>
-            <data>a846</data>
-            <key>vendor-id</key>
-            <data>8680</data>
         </dict>
     </dict>
     
-    <!-- ใช้ Native Libraries แทน -->
+    <!-- ประกาศตารางคลังไลบรารีระบบ (KPI) ของ macOS Sonoma (Darwin 23) ตามที่ Makefile กำหนด -->
     <key>OSBundleLibraries</key>
     <dict>
-        <!-- IOKit Core -->
-        <key>com.apple.iokit.IOAcceleratorFamily2</key>
-        <string>500.0.0</string>
         <key>com.apple.iokit.IOGraphicsFamily</key>
-        <string>600.0.0</string>
+        <string>500.0.0</string>
         <key>com.apple.iokit.IOPCIFamily</key>
         <string>300.0.0</string>
-        
-        <!-- Apple Graphics Frameworks -->
-        <key>com.apple.driver.AppleGraphicsControl</key>
-        <string>200.0.0</string>
-        <key>com.apple.driver.AppleGraphicsDeviceControl</key>
-        <string>200.0.0</string>
-        <key>com.apple.driver.AppleGraphicsPowerManagement</key>
-        <string>200.0.0</string>
-        
-        <!-- Kernel -->
         <key>com.apple.kpi.bsd</key>
         <string>23.0.0</string>
         <key>com.apple.kpi.iokit</key>
@@ -105,7 +64,7 @@
     </dict>
     
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 Intel Corporation. All rights reserved.</string>
+    <string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
     <key>OSBundleAllowUserLoad</key>
     <true/>
     <key>OSBundleRequired</key>
