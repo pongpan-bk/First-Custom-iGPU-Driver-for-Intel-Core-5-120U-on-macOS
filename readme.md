@@ -1,9 +1,9 @@
 <img width="1280" height="721" alt="social-share" src="https://github.com/user-attachments/assets/6c136d3a-8fa0-43f4-9750-8de068c265e4" />
 
-
-                                  Sisyphus - Ultraworker·Big PickleOpenCode Zen
-
-<svg width='32' height='40' viewBox='0 0 32 40' fill='none' xmlns='http://www.w3.org/2000/svg'><g clip-path='url(#clip0_1311_94973)'><path d='M24 32H8V16H24V32Z' fill='#4B4646'/><path d='M24 8H8V32H24V8ZM32 40H0V0H32V40Z' fill='#F1ECEC'/></g><defs><clipPath id='clip0_1311_94973'><rect width='32' height='40' fill='white'/></clipPath></defs></svg>
+<p align="center">
+  <b>Sisyphus - Ultraworker·Big PickleOpenCode Zen</b><br>
+  <svg width='160' height='200' viewBox='0 0 32 40' fill='none' xmlns='http://www.w3.org/2000/svg'><g clip-path='url(#clip0_1311_94973)'><path d='M24 32H8V16H24V32Z' fill='#4B4646'/><path d='M24 8H8V32H24V8ZM32 40H0V0H32V40Z' fill='#F1ECEC'/></g><defs><clipPath id='clip0_1311_94973'><rect width='32' height='40' fill='white'/></clipPath></defs></svg>
+</p>
 
 <p align="center">
   <b>Powered by opencode-ai</b><br>
