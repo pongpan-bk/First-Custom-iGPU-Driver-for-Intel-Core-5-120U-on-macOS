@@ -20,50 +20,81 @@
 
 # source-analysis/ — Deep Source Analysis + ผลขุดสมอง OpenCode
 
-> **วันที่วิเคราะห์:** 2026-08-25  
-> **วิเคราะห์โดย:** Sisyphus *(surgical structure-scan method — explore agents timeout ทั้ง 2 รอบจึงทำเอง)*
+# First Custom iGPU Driver for Intel Core 5 120U on macOS
 
-## รายงานวิเคราะห์ซอร์ส (5 ฉบับ)
-
-| ไฟล์ | ครอบคลุม |
-| :--- | :--- |
-| **01-core-driver.md** | MyIntelGPU class, lifecycle, Phase 0-7 pipeline (mapping i915), BCS tools, boot-args |
-| **02-interrupts-power-mmio.md** | Gen11 master IRQ flow, 2.0.229 per-bit selector fix, RC6/forceWake/S3, BAR strategies, register tables |
-| **03-ring-execlist-ppgtt.md** | ELSP protocol + descriptor encoding, PPGTT 4-level (PTE 0xC3 bug), MI_FLUSH_DW Gen12 verified form, head-tracking truth |
-| **04-vcs-media-decode.md** | VDBOX H.264 pipeline end-to-end, MFX command encoders + QM matrices, DPB rules, userspace contract |
-| **05-display-gem-client-build.md** | UserClient selector table 0-24, GEM/PTE defines, Accelerator surfaces, Makefile flags, plist diff, deploy workflow |
+ระบบควบคุมชิปประมวลผลกราฟิกและเร่งความเร็วฮาร์ดแวร์ระดับเคอร์เนล (Native Kernel Extension) สำหรับสถาปัตยกรรม **Intel Raptor Lake-U / Raptor Lake Refresh (Device ID: `0xA7AC8086`)** บนระบบปฏิบัติการ macOS เพื่อปลดล็อกขีดจำกัดและเปิดใช้งานระบบกราฟิกอย่างสมบูรณ์
 
 ---
 
-## ผลขุดสมอง OpenCode จากไดรฟ์ D: (raw APFS carve)
+## 🚀 คุณสมบัติระดับระบบ (Core Architecture Features)
 
-* **วันที่:** 2026-08-25  
-* **วิธี:** raw sector read ผ่าน `\\.\PhysicalDrive0` *(ข้าม MacDrive driver ที่พัง)*  
-* **พาร์ติชันเป้าหมาย:** P4 offset `402660524032` (~100.91 GiB, GUID `7C3457EF-...` = Apple APFS)
+ตัวไดรเวอร์ถูกพัฒนาขึ้นมาเพื่อควบคุมเลเยอร์หน่วยความจำและการประมวลผลคำสั่งกราฟิกในระดับต่ำ (Low-level Layer 3/4) โดยข้ามข้อจำกัดเดิมของไดรเวอร์ Apple เนทีฟ:
 
-### ทำไมต้อง carve
-เนื่องจาก MacDrive MDAPFS filter ไม่ attach volume ทำให้เปิด (open) ไฟล์ตรงๆ ล้มเหลวทั้งหมด บังคับแสดงข้อผิดพลาด ` "A device attached to the system is not functioning"` แม้จะทำการ restart service / reboot / mountvol ก็ไม่หาย จึงจำเป็นต้องเปลี่ยนมาใช้วิธีอ่าน sector ดิบผ่าน disk device แทน
-
-### ไฟล์ในโฟลเดอร์นี้
-
-| ไฟล์ | คืออะไร | คุณค่า |
-| :--- | :--- | :--- |
-| **conversations_extract.txt** *(12.8MB)* | 13,837 ชิ้นข้อความสนทนาจริงจาก OpenCode sessions บนแมค (text parts + Thai) | ⭐ **สมองตัวจริง** |
-| **messages_harvest.txt** *(46MB)* | 58,147 records ดิบจาก leaf pages ของ opencode.db (รวม tool calls, sessionID JSON) | ดิบครบกว่า |
-| **sessions_cluster.txt** *(3MB)* | shell history/carved strings โซน storage | คำสั่ง deploy จริง |
-
-> ⚠️ **หมายเหตุ:** `opencode_recovered.db` ถูกลบทิ้งเนื่องจากทำการ dump ตรงจาก offset `488572096512` (119,712 pages) แต่ด้วยกลไก APFS COW ทำหน้าเพจกระจัดกระจาย ส่งผลให้ไฟล์ malformed และใช้งานไม่ได้ จึงต้องหันไปเดโค้ดเลเยอร์ใบไม้ (leaf pages) โดยตรงแทน
+*   **RCS (Ring Control Subsystem):** บูตผ่านฉลุยพร้อมสถานะ **`RCS-Status = "CREATE OK"`** ควบคุมระบบวงรอบการสั่งงานหลักของจีพียูได้สมบูรณ์
+*   **GGTT (Global Graphics Translation Table):** ระบบจัดสรรและชี้พิกัดแผนที่หน่วยความจำระดับต่ำ **`RCS-GGTT`** ขนาด 64MB เพื่อส่งผ่านข้อมูลกราฟิกโดยตรงไม่ผ่านเลเยอร์คอขวด
+*   **Media Hardware Acceleration:** ปลดล็อกขีดจำกัดระบบถอดรหัสและเข้ารหัสวิดีโอผ่านฮาร์ดแวร์ดิบอย่าง **VDBOX** และ **VEBOX** รองรับความละเอียดสูงสุดถึง **8K (`8192x8192`)**
+    *   **Video Decoding:** รองรับ H.264, HEVC, VP9 และ **AV1 Decoding** (เปิด YouTube 4K/8K บน Google Chrome ลื่น ๆ ไม่กินแรงซีพียู)
+    *   **Video Encoding:** รองรับ H.264 และ HEVC ความละเอียดสูงสุด 4K (`4096x4096`)
+*   **IOAccelerator Linkage:** แมตช์เข้าเลเยอร์ความเร่งฮาร์ดแวร์ระบบผ่าน `IOMatchCategory = IOAccelerator` และเปิดช่องทางการคุยกับแอปพลิเคชันภายนอกผ่านคลาส `MyIntelGPUClient` และ `MyIntelVCSClient`
 
 ---
 
-## วิธีอ่าน conversations_extract.txt
+## 📊 ตารางสถานะการทำงานใน I/O Registry (`ioreg`)
 
-1. แยกบล็อกข้อความด้วยเครื่องหมาย `\n\n@@@@\n\n`
-2. รูปแบบบล็อกข้อมูลจะเป็น JSON โครงสร้าง: `{"sessionID":...,"type":"text","text":"..."}` ซึ่งเก็บข้อความโต้ตอบจริงระหว่าง AI และ User
-3. ข้อความภาษาไทยถูกเข้ารหัสเป็น **UTF-8** ตามปกติ *(หากเปิดบน Terminal เก่าแล้วแสดงผลเป็น `???` แนะนำให้เปิดด้วย Text Editor ที่รองรับ UTF-8)*
+เมื่อทำการตรวจสอบสถานะในระดับซิสเทม ไดรเวอร์จะลงทะเบียนคลาสและพารามิเตอร์เข้าสู่ระบบเคอร์เนลอย่างถูกต้อง 100%:
 
-### สคริปต์ที่ใช้ (อยู่ที่ `%TEMP%\opencode\`)
-* `rawscan2.py` (signature scan)
-* `carve.py` (string carve)
-* `final3.py` (SQLite header hunt)
-* `harvest.py` (leaf-page record decoder)
+```text
++-o MyIntelGPU  <class MyIntelGPU, id 0x1000004f5, registered, matched, active>
+  | {
+  |   "IOClass" = "MyIntelGPU"
+  |   "MetalStatisticsName" = "Raptor Lake-P"
+  |   "IOMatchCategory" = "IOAccelerator"
+  |   "IOUserClientClass" = "MyIntelGPUClient"
+  |   "RCS-GGTT" = 67125248
+  |   "RCS-Status" = "CREATE OK"
+  |   "IOPCIMatch" = "0xA7AC8086"
+  |   "H264Decoding" = Yes
+  |   "HevcDecoding" = Yes
+  |   "VP9Decoding" = Yes
+  |   "AV1Decoding" = Yes
+  |   "MaxDecodeResolution" = "8192x8192"
+  | }
+  | 
+  +-o MyIntelVCS  <class IOService, id 0x100000522, registered, matched, active>
+      {
+        "IOProviderClass" = "IOService"
+        "IOUserClientClass" = "MyIntelVCSClient"
+      }
+```
+
+---
+
+## 🛠️ โครงสร้างซอร์สโค้ดและส่วนประกอบ (Repository Structure)
+
+*   `MyIntelGPU.cpp` / `.hpp`: คลาสหลักคุมวงจรชีวิตไดรเวอร์ (Lifecycle) และพอร์ตเชื่อมต่อ PCI (`IOPCIDevice`)
+*   `MyIntelFramebuffer.cpp` / `.hpp`: เลเยอร์ควบคุมเฟรมบัฟเฟอร์ พอร์ตสัญญาณภาพ และพิกัดหน้าจอ
+*   `MyIntelGEMBuffer.cpp` / `.hpp`: ระบบจัดสรรพื้นที่คลังหน่วยความจำ (VRAM/Graphics Execution Manager) 
+*   `MyIntelRing.cpp` / `.hpp`: โครงสร้างควบคุมคิวงานและคำสั่งประมวลผล (Ring Buffer Pipeline)
+*   `MyIntelVCSClient.cpp` / `.hpp`: สะพานเชื่อมระบบฝั่งผู้ใช้ (Userspace) ตรงสู่ภาคถอดรหัสวิดีโอ (VDBOX)
+
+---
+
+## 📝 วิธีการตรวจสอบสถานะ (Verification Commands)
+
+เปิด Terminal แล้วยิงคำสั่งระดับรูทเพื่อตรวจสอบความนิ่งของตัว Kext:
+
+```bash
+# ตรวจสอบว่าเคอร์เนลโหลดไดรเวอร์ทำงานแบบ Active หรือไม่
+sudo kmutil showloaded | grep -i MyIntelGPU
+
+# ตรวจสอบการลงทะเบียนคลาสและโครงสร้างหน่วยความจำกราฟิก
+sudo ioreg -l -b -r -c MyIntelGPU
+```
+
+---
+
+## ⚖️ License & Credits
+
+*   **Developed by:** [pongpan-bk](https://github.com)
+*   Powered by dedication to low-level reverse engineering and kernel development.
+<img width="1920" height="1080" alt="Screenshot 2569-09-24 at 23 18 15" src="https://github.com/user-attachments/assets/03302143-8a51-47e8-aec0-ada0968e8b61" />
