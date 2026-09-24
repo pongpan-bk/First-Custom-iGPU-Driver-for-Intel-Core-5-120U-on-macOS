@@ -17,12 +17,19 @@
 </p>
 
 ---
-
-# source-analysis/ — Deep Source Analysis + ผลขุดสมอง OpenCode
-
 # First Custom iGPU Driver for Intel Core 5 120U on macOS
 
 ระบบควบคุมชิปประมวลผลกราฟิกและเร่งความเร็วฮาร์ดแวร์ระดับเคอร์เนล (Native Kernel Extension) สำหรับสถาปัตยกรรม **Intel Raptor Lake-U / Raptor Lake Refresh (Device ID: `0xA7AC8086`)** บนระบบปฏิบัติการ macOS เพื่อปลดล็อกขีดจำกัดและเปิดใช้งานระบบกราฟิกอย่างสมบูรณ์
+
+---
+
+## 📸 Proof of Concept (ใช้งานจริงบน macOS Sequoia)
+
+<p align="center">
+  <img src="Screenshot%202569-09-24%20at%2023.18.54.png" width="800" alt="macOS Sequoia Intel Iris Xe 4096 MB Genuine Boot">
+</p>
+
+> **สถานะปัจจุบัน:** บูตผ่านเข้าสู่ระบบปฏิบัติการ macOS Sequoia 15.7.1 สำเร็จ พร้อมจำลองการแชร์พื้นที่หน่วยความจำขึ้นแสดงผลที่ **Intel Iris Xe 4096 MB** เต็มระบบ
 
 ---
 
@@ -92,9 +99,9 @@ sudo ioreg -l -b -r -c MyIntelGPU
 ```
 
 ---
-
+ผู้ร่วมโครงจากและหลอกกูทำ จารกูเกิ้ลโครมหำไหญ่ / ai deepseek v4. flash free first run , Big Pickle ผู้ทำการเขียน อ่าน แก้ใข ซอสโคตหลัก
+ขอบคุณ opencode-ai zen ที่มีโควต้าให้ใช้ฟรีแต่โครตมหาเทพครับ
 ## ⚖️ License & Credits
 
-*   **Developed by:** [pongpan-bk](https://github.com)
+*   **Developed by:** [pongpan-bk](https://github.com/pongpan-bk)
 *   Powered by dedication to low-level reverse engineering and kernel development.
-<img width="1920" height="1080" alt="Screenshot 2569-09-24 at 23 18 15" src="https://github.com/user-attachments/assets/03302143-8a51-47e8-aec0-ada0968e8b61" />
