@@ -99,7 +99,7 @@ sudo ioreg -l -b -r -c MyIntelGPU
 ```
 
 ---
-ผู้ร่วมโครงจากและหลอกกูทำ จารกูเกิ้ลโครมหำไหญ่ / ai deepseek v4. flash free first run , Big Pickle ผู้ทำการเขียน อ่าน แก้ใข ซอสโคตหลัก
+ผู้ร่วมโครงการและหลอกกูทำ จารกูเกิ้ลโครมหำไหญ่ แปลภาษาควายเป็นภาษาเอไอ  / ai deepseek v4. flash free first run , Big Pickle ผู้ทำการเขียน อ่าน แก้ใข ซอสโคตหลัก
 ขอบคุณ opencode-ai zen ที่มีโควต้าให้ใช้ฟรีแต่โครตมหาเทพครับ
 ## ⚖️ License & Credits
 
