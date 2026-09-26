@@ -68,9 +68,9 @@
 			<key>MetalPluginName</key>
 			<string>AppleIntelKBLGraphicsMTLDriver</string>
 			<key>MetalStatisticsName</key>
-			<string>Raptor Lake-P</string>
+			<string>Intel Iris Xe </string>
 			<key>model</key>
-			<string>Raptor Lake-P</string>
+			<string>Intel Iris Xe </string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
