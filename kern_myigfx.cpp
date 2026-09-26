@@ -13,16 +13,19 @@
 
 #include "kern_myigfx.hpp"
 
+// ประกาศไอดี Kext ปลายทางตามมิติประเภทขนาด size_t สำหรับ Lilu
+static size_t kextTglId   { 0 };
+static size_t kextIclLpId { 1 };
+static size_t kextIclHpId { 2 };
+
 MYIGFX *MYIGFX::callbackMYIGFX = nullptr;
 
-// Intel framebuffer kexts to wait for. Raptor Lake (Gen 12) shares the Gen12
-// engine family with Tiger Lake, so on Sequoia the TGL framebuffer kext is the
-// match target. ICL kexts are listed for systems without TGL support.
-// No binary patches are applied, so no kext paths are provided (pathCount 0).
+// จัดพารามิเตอร์ลงช่อง Aggregate Initialization รูปแบบ C++11 ดั้งเดิม 
+// เรียงลำดับ: ชื่อ Kext, เส้นทางอาเรย์ (nullptr), จำนวนเส้นทาง (0), ปีกกา patches ว่าง {}, ปีกกาพิกัด {}, สถานะโหลด, และไอดีเก็บค่าปลายทาง
 KernelPatcher::KextInfo MYIGFX::kextList[] {
-	{ "com.apple.driver.AppleIntelTGLGraphicsFramebuffer",    nullptr, 0, {true}, {}, KernelPatcher::KextInfo::Unloaded },
-	{ "com.apple.driver.AppleIntelICLLPGraphicsFramebuffer",  nullptr, 0, {true}, {}, KernelPatcher::KextInfo::Unloaded },
-	{ "com.apple.driver.AppleIntelICLHPGraphicsFramebuffer",  nullptr, 0, {true}, {}, KernelPatcher::KextInfo::Unloaded }
+	{ "com.apple.driver.AppleIntelTGLGraphicsFramebuffer",    nullptr, 0, {}, {}, KernelPatcher::KextInfo::Unloaded, kextTglId },
+	{ "com.apple.driver.AppleIntelICLLPGraphicsFramebuffer",  nullptr, 0, {}, {}, KernelPatcher::KextInfo::Unloaded, kextIclLpId },
+	{ "com.apple.driver.AppleIntelICLHPGraphicsFramebuffer",  nullptr, 0, {}, {}, KernelPatcher::KextInfo::Unloaded, kextIclHpId }
 };
 
 void MYIGFX::init() {
@@ -44,8 +47,7 @@ void MYIGFX::init() {
 		DeviceInfo::deleter(devInfo);
 	}
 
-	// Register kext load callbacks as a fallback: the IGPU may appear later,
-	// and onKextLoad fires for each kext in the list as it loads.
+	// ลงทะเบียนรับสิทธิ์ผ่านตัวแปรสถาปัตยกรรมหลัก "lilu" แทนโมเดลสไตล์เก่า
 	lilu.onKextLoad(kextList, arrsize(kextList),
 		[](void *user, KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 			callbackMYIGFX->processKext(patcher, index, address, size);
@@ -59,8 +61,6 @@ void MYIGFX::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 	if (didProcessBuiltin) return;
 
 	// WEG-style: obtain the device tree info and process the builtin GPU.
-	// DeviceInfo walks the IORegistry and caches videoBuiltin (iGPU) itself —
-	// no need for a manual findDeviceByClass search.
 	auto devInfo = DeviceInfo::create();
 	if (devInfo) {
 		if (devInfo->videoBuiltin) {
@@ -72,10 +72,6 @@ void MYIGFX::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 		}
 		DeviceInfo::deleter(devInfo);
 	}
-
-	// Future extension points (kept minimal — connector only):
-	// - media engine (VDBOX/VEBOX) registration patches
-	// - framebuffer connector map tweaks for this specific panel
 }
 
 void MYIGFX::processBuiltinProperties(IORegistryEntry *device, DeviceInfo *info) {
@@ -92,9 +88,7 @@ void MYIGFX::processBuiltinProperties(IORegistryEntry *device, DeviceInfo *info)
 		uint32_t realDevice = WIOKit::readPCIConfigValue(obj, WIOKit::kIOPCIConfigDeviceID);
 		uint32_t acpiDevice = 0, fakeDevice = 0;
 
-		// The fake device-id is provided via the IORegistry "device-id" property,
-		// normally set by OpenCore DeviceProperties for this exact GPU node.
-		// Example: real A7AC (Raptor Lake-U) -> 9A49 (Tiger Lake GT2) etc.
+		// The fake device-id is provided via the IORegistry "device-id" property.
 		if (!WIOKit::getOSDataValue(obj, "device-id", acpiDevice))
 			DBGLOG("myigfx", "missing IGPU device-id (no spoof target configured)");
 
@@ -130,13 +124,13 @@ uint16_t MYIGFX::wrapConfigRead16(IORegistryEntry *service, uint32_t space, uint
 	if (offset == WIOKit::kIOPCIConfigDeviceID && service != nullptr) {
 		auto name = service->getName();
 		if (!name) return result;
-		// Spoof only for the IGPU node.
+		// แก้ไขปัญหาเปรียบเทียบข้อมูลด้วยการใช้พิกัดตำแหน่งอาเรย์ตัวอักษรทีละช่อง [index] แทนการเช็คผ่านพอยเตอร์ตรงๆ
 		bool doSpoof = (callbackMYIGFX->hasIgpuSpoof && name[0] == 'I' && name[1] == 'G' && name[2] == 'P' && name[3] == 'U');
 		if (doSpoof) {
 			uint32_t device;
 			if (WIOKit::getOSDataValue(service, "device-id", device) && device != result) {
-				DBGLOG("myigfx", "configRead16 %s reported 0x%04x instead of 0x%04x", name, device, result);
-				return device;
+				DBGLOG("myigfx", "configRead16 %s reported 0x%04x instead of 0x%04x", name, static_cast<uint16_t>(device), result);
+				return static_cast<uint16_t>(device);
 			}
 		}
 	}
@@ -146,11 +140,10 @@ uint16_t MYIGFX::wrapConfigRead16(IORegistryEntry *service, uint32_t space, uint
 
 uint32_t MYIGFX::wrapConfigRead32(IORegistryEntry *service, uint32_t space, uint8_t offset) {
 	auto result = callbackMYIGFX->orgConfigRead32(service, space, offset);
-	// According to lvs1974 unaligned reads may actually happen!
 	if ((offset == WIOKit::kIOPCIConfigDeviceID || offset == WIOKit::kIOPCIConfigVendorID) && service != nullptr) {
 		auto name = service->getName();
 		if (!name) return result;
-		// Spoof only for the IGPU node.
+		// แก้ไขปัญหาเปรียบเทียบข้อมูลด้วยการใช้พิกัดตำแหน่งอาเรย์ตัวอักษรทีละช่อง [index] เช่นเดียวกันกับด้านบน
 		bool doSpoof = (callbackMYIGFX->hasIgpuSpoof && name[0] == 'I' && name[1] == 'G' && name[2] == 'P' && name[3] == 'U');
 		if (doSpoof) {
 			uint32_t device;

@@ -1,10 +1,80 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "myintel_h264_parse.h"
+
+static int test_nal_boundaries(void)
+{
+    const uint8_t fourByte[] = {
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x11,
+        0x00, 0x00, 0x00, 0x01, 0x68, 0x22,
+    };
+    const uint8_t threeByte[] = {
+        0x00, 0x00, 0x01, 0x67, 0x33,
+        0x00, 0x00, 0x01, 0x68, 0x44,
+    };
+    const uint8_t *nal;
+    uint32_t nalLen;
+    int nalType;
+    H264NalIter it;
+
+    /* Given: two NALs with a four-byte start code. */
+    h264_nal_init(&it, fourByte, sizeof(fourByte));
+    nal = NULL; nalLen = 0; nalType = -1;
+    /* When: the iterator returns each NAL. */
+    if (!h264_nal_next(&it, &nal, &nalLen, &nalType) || nalType != 7 ||
+        nalLen != 2 || nal[0] != 0x67 || nal[1] != 0x11) {
+        fprintf(stderr, "FAIL four-byte start code: first NAL len=%u type=%d\n",
+                nalLen, nalType);
+        return 1;
+    }
+    if (!h264_nal_next(&it, &nal, &nalLen, &nalType) || nalType != 8 ||
+        nalLen != 2 || nal[0] != 0x68 || nal[1] != 0x22) {
+        fprintf(stderr, "FAIL four-byte start code: second NAL len=%u type=%d\n",
+                nalLen, nalType);
+        return 1;
+    }
+    if (h264_nal_next(&it, &nal, &nalLen, &nalType)) {
+        fprintf(stderr, "FAIL four-byte start code: extra NAL\n");
+        return 1;
+    }
+
+    /* Given: two NALs with a three-byte start code. */
+    h264_nal_init(&it, threeByte, sizeof(threeByte));
+    /* When: the iterator returns each NAL. */
+    if (!h264_nal_next(&it, &nal, &nalLen, &nalType) || nalType != 7 ||
+        nalLen != 2 || nal[0] != 0x67 || nal[1] != 0x33) {
+        fprintf(stderr, "FAIL three-byte start code: first NAL len=%u type=%d\n",
+                nalLen, nalType);
+        return 1;
+    }
+    if (!h264_nal_next(&it, &nal, &nalLen, &nalType) || nalType != 8 ||
+        nalLen != 2 || nal[0] != 0x68 || nal[1] != 0x44) {
+        fprintf(stderr, "FAIL three-byte start code: second NAL len=%u type=%d\n",
+                nalLen, nalType);
+        return 1;
+    }
+    if (h264_nal_next(&it, &nal, &nalLen, &nalType)) {
+        fprintf(stderr, "FAIL three-byte start code: extra NAL\n");
+        return 1;
+    }
+
+    puts("NAL boundary test: PASS");
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (test_nal_boundaries() != 0) {
+        return 2;
+    }
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s file.h264\n", argv[0]);
+        return 1;
+    }
     FILE *f = fopen(argv[1], "rb");
+    if (!f) { perror(argv[1]); return 1; }
     fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-    uint8_t *b = malloc(len); fread(b, 1, len, f); fclose(f);
+    if (len <= 0) { fclose(f); return 1; }
+    uint8_t *b = malloc((size_t)len); fread(b, 1, (size_t)len, f); fclose(f);
     H264SPS sps; H264PPS pps; H264SliceHdr sh;
     bool hs = false, hp = false, hsl = false;
     uint8_t rbsp[1024];
@@ -29,6 +99,7 @@ int main(int argc, char **argv) {
             printf("  SLICE parse=%d type=%u firstMb=%u hdrBytes=%u\n", hsl, sh.sliceType, sh.firstMbInSlice, sh.sliceHeaderBytes); }
         if (idx > 8) break;
     }
+    free(b);
     printf("RESULT sps=%d pps=%d slice=%d\n", hs, hp, hsl);
     return 0;
 }

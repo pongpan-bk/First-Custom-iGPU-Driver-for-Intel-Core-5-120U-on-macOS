@@ -15,40 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1.3</string>
+	<string>3.1.4</string>
 	<key>CFBundleVersion</key>
-	<string>3.1.38</string>
+	<string>3.1.48</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>Universal_AutoMatch_GPU</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.pongpan-bk.MyIntelGPU</string>
-			<key>IOClass</key>
-			<string>MyIntelGPU</string>
-			<key>IOMatchCategory</key>
-			<string>IOAccelerator</string>
-			<key>IOPCIClassMatch</key>
-			<string>0x03000000&amp;0xff000000</string>
-			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
-			<key>IOProbeScore</key>
-			<integer>20000</integer>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-			<key>IOVARendererID</key>
-			<data>
-			EAAAAA==
-			</data>
-			<key>MetalPluginName</key>
-			<string>AppleIntelKBLGraphicsMTLDriver.bundle</string>
-			<key>IOGLBundleName</key>
-			<string>AppleIntelKBLGraphicsGLDriver.bundle</string>
-			<key>MetalStatisticsName</key>
-			<string>Raptor Lake-P</string>
-			<key>model</key>
-			<string>Integrated GPU</string>
-		</dict>
 		<key>Universal_AutoMatch_Framebuffer</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
@@ -71,6 +42,35 @@
 			</data>
 			<key>framebuffer-patch-enable</key>
 			<integer>1</integer>
+		</dict>
+		<key>Universal_AutoMatch_GPU</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.pongpan-bk.MyIntelGPU</string>
+			<key>IOClass</key>
+			<string>MyIntelGPU</string>
+			<key>IOGLBundleName</key>
+			<string>AppleIntelKBLGraphicsGLDriver</string>
+			<key>IOMatchCategory</key>
+			<string>IOAccelerator</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
+			<key>IOPCIMatch</key>
+			<string>0xa7ac8086</string>
+			<key>IOProbeScore</key>
+			<integer>20000</integer>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+			<key>IOVARendererID</key>
+			<data>
+			EAAAAA==
+			</data>
+			<key>MetalPluginName</key>
+			<string>AppleIntelKBLGraphicsMTLDriver</string>
+			<key>MetalStatisticsName</key>
+			<string>Raptor Lake-P</string>
+			<key>model</key>
+			<string>Raptor Lake-P</string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>

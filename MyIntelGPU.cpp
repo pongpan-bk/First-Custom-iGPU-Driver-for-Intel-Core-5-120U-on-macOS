@@ -33,7 +33,6 @@
 #include "MyIntelRing.hpp"
 #include "MyIntelGEMBuffer.hpp"   /* GEM_PAGE_SIZE for VRAM pool sizing */
 #include "MyIntelVCSClient.h"
-#include "MyIntelObfuscate.h"
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 #include <IOKit/IOLib.h>
@@ -94,6 +93,11 @@ void mygpuProgress(const char *tag)
 extern "C" {
     static int myintelgpu_module_start(kmod_info_t *ki, void *data) { return 0; }
     static int myintelgpu_module_stop(kmod_info_t *ki, void *data)  { return 0; }
+    /* Layer 3 (-fvisibility=hidden) hides all symbols by default, but
+     * kernelmanagerd requires _kmod_info to be an EXTERNAL symbol or it
+     * refuses to place the kext in the kernel collection
+     * ("kexts must have a _kmod_info symbol"). Force default visibility. */
+    __attribute__((visibility("default")))
     kmod_info_t kmod_info = { 0, 1, -1U,                /* next, info_version, id */
         "com.myintelgpu.driver", "1.0.0",              /* name, version */
         -1, 0, 0, 0, 0,                               /* ref_count, ref_list, addr, size, hdr_size */
@@ -192,16 +196,22 @@ extern "C" {
 OSDefineMetaClassAndStructors(MyIntelGPU, IOService)
 
 /*
- * IODebug — debug output kernel log
+ * IODebug — optional verbose diagnostics.
  *
- * IOLog ; comment
- * _EXTRA_DEBUG verbose dev
- *
- * NOTE: os_log was reverted (see MyIntelRing.cpp) — os_log sections broke
- * prelink/auxKC → boot failure. IOLog-only + dmesg capture (msgbuf=1MB).
+ * Production builds omit these calls to reduce kernel text/string size.
+ * Define MYINTELGPU_DIAGNOSTICS=1 for a diagnostic build; direct IOLog
+ * error/progress messages remain available in either mode.
  */
+#ifndef MYINTELGPU_DIAGNOSTICS
+#define MYINTELGPU_DIAGNOSTICS 0
+#endif
+
+#if MYINTELGPU_DIAGNOSTICS
 #define IODebug(fmt, ...) \
     do { IOLog("MyIntelGPU: [%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__); } while(0)
+#else
+#define IODebug(fmt, ...) do { } while (0)
+#endif
 
 // #define EXTRA_DEBUG /* log translate address */
 
@@ -249,6 +259,8 @@ bool MyIntelGPU::init(OSDictionary *dict)
     fRevision     = 0;
     fGraphicsVer  = 0;
     fFakeGen      = 0;
+    fHardwareGeneration = 0;
+    fNativeGen10  = false;
     fUseGmdId     = false;
     fGttTotal     = 0;
     fMappableEnd  = 0;
@@ -287,8 +299,6 @@ bool MyIntelGPU::init(OSDictionary *dict)
  * entry 4 fields + name pointer = init
      */
     memset(fTransTable, 0, sizeof(fTransTable));
-
-    obfuscate_init();
 
     IODebug("init() — OK");
 
@@ -563,6 +573,93 @@ uint32_t MyIntelGPU::detectHardwareGeneration(void)
     }
 
     return gen;
+}
+
+#pragma mark -
+#pragma mark - Native Gen10/12 pipeline (mynative=1)
+
+/*
+ *  bool MyIntelGPU::initializeGen10Hardware(OSDictionary *dict)
+ *
+ *  Entry point for the native Gen10/12 pipeline (boot-arg mynative=1).
+ *  Cuts FakeID translation: fFakeGen=0 makes translateAddress() return
+ *  every offset unchanged (guard: fFakeGen == 0 → identity) and makes
+ *  buildTranslationTable() register no fake windows. Downstream GGTT
+ *  init + ring creation then address the hardware on its real Gen12
+ *  MMIO bases (RCS 0x2000 / BCS 0x22000 / VCS 0x1C0000 / VECS 0x1C8000)
+ *  through the existing *_REAL init paths — no duplicated register
+ *  programming.
+ *
+ *  Default OFF (fNativeGen10=false): without the boot-arg the legacy
+ *  fake-gen translation behaves exactly as shipped in 3.1.35.
+ */
+bool MyIntelGPU::initializeGen10Hardware(OSDictionary *dict)
+{
+    (void)dict;
+
+    if (fGraphicsVer < 10) {
+        IOLog("MyIntelGPU: mynative=1 ignored — Gen%u is not a Gen10+ GPU, keeping FakeGen=%u\n",
+              fGraphicsVer, fFakeGen);
+        return false;
+    }
+
+    fHardwareGeneration = 10;
+    fFakeGen            = 0;
+    fNativeGen10        = true;
+    setProperty("NativeGen10", fNativeGen10);
+
+    IOLog("MyIntelGPU: NATIVE Gen10/12 pipeline — FakeGen translation CUT "
+          "(identity MMIO, rings on RCS 0x%X / BCS 0x%X / VCS 0x%X / VECS 0x%X)\n",
+          RCS0_BASE_REAL, BCS0_BASE_REAL, VCS0_BASE_REAL, VECS0_BASE_REAL);
+    return true;
+}
+
+/*
+ *  bool MyIntelGPU::configureGGTTForGen10(void)
+ *
+ *  GGTT leg of the native pipeline — idempotent wrapper around the
+ *  existing ggttInitHardware() (Gen8+ path, fills fGsm/fGttTotal, maps
+ *  BAR2 aperture). start() calls ggttInitHardware() before this runs,
+ *  so in the normal native flow this only verifies + logs; the init
+ *  branch fires only when called before GGTT setup (Code.cpp order).
+ */
+bool MyIntelGPU::configureGGTTForGen10(void)
+{
+    if (!fGsm || fGttTotal == 0) {
+        if (!ggttInitHardware() || !fGsm || fGttTotal == 0) {
+            IOLog("MyIntelGPU: ERROR — Gen10 GGTT hardware init failed\n");
+            return false;
+        }
+    }
+
+    IOLog("MyIntelGPU: Gen10 GGTT ready (gsm=%p, gttTotal=%u entries, aperture=%llu MB)\n",
+          fGsm, fGttTotal, fApertureSize >> 20);
+    return true;
+}
+
+/*
+ *  bool MyIntelGPU::setupExecutionRingsGen10(void)
+ *
+ *  Ring leg of the native pipeline — idempotent wrapper around
+ *  initHardwareAcceleration(). That path already programs the engines
+ *  on the REAL Gen12 bases (ringCreate(..., RCS0_BASE_REAL, ...)); with
+ *  translation cut (fFakeGen=0) every readReg32/writeReg32 inside it
+ *  reaches the same offsets untouched. VECS stays on VECS0_BASE_REAL
+ *  (0x1C8000) — never 0x1A000, which is Coffee Lake encode and wrong
+ *  for Gen12 silicon.
+ */
+bool MyIntelGPU::setupExecutionRingsGen10(void)
+{
+    if (!fRingRCS && !fRingBCS && !fRingVCS && !fAccelInitialized) {
+        if (!initHardwareAcceleration()) {
+            IOLog("MyIntelGPU: ERROR — Gen10 execution ring setup failed\n");
+            return false;
+        }
+    }
+
+    IOLog("MyIntelGPU: Gen10 rings ready (RCS@0x%X BCS@0x%X VCS@0x%X VECS@0x%X, accel=%d)\n",
+          RCS0_BASE_REAL, BCS0_BASE_REAL, VCS0_BASE_REAL, VECS0_BASE_REAL, fAccelInitialized);
+    return true;
 }
 
 #pragma mark -
@@ -4006,6 +4103,26 @@ bool MyIntelGPU::start(IOService *provider)
      */
     detectHardwareGeneration();
 
+    /*
+     *  Native Gen10/12 pipeline — opt-in boot-arg mynative=1.
+     *  Must run BEFORE buildTranslationTable() so fFakeGen=0 short-circuits
+     *  it ("native mode — no table") and every later MMIO access is
+     *  identity-mapped. Default OFF: no boot-arg → legacy fake-gen path
+     *  byte-for-byte identical to the shipped 3.1.35 behavior.
+     */
+    {
+        uint32_t nativeArg = 0;
+        if (PE_parse_boot_argn("mynative", &nativeArg, sizeof(nativeArg)) &&
+            nativeArg != 0) {
+            if (initializeGen10Hardware(NULL)) {
+                IOLog("MyIntelGPU: native Gen10/12 path engaged (mynative=1)\n");
+            } else {
+                IOLog("MyIntelGPU: native Gen10/12 path not engaged — FakeGen=%u translation stays ON\n",
+                      fFakeGen);
+            }
+        }
+    }
+
     IODebug("Phase 3: Hardware detected — Gen=%u, FakeGen=%u%s",
             fGraphicsVer, fFakeGen,
             fUseGmdId ? " (GMD_ID)" : "");
@@ -4331,6 +4448,16 @@ bool MyIntelGPU::start(IOService *provider)
      */
     initHardwareAcceleration();
 
+    /* Native Gen10/12 pipeline conclusion — Code.cpp order:
+     * initializeGen10Hardware (dispatch, above) → configureGGTTForGen10 →
+     * setupExecutionRingsGen10. Both wrappers are idempotent: at this
+     * point GGTT (Phase 6) and accel (above) already ran, so they only
+     * verify the real Gen12 bases + log. */
+    if (fNativeGen10) {
+        configureGGTTForGen10();
+        setupExecutionRingsGen10();
+    }
+
     if (fAccelInitialized) {
         IODebug("Phase 6b: HW Acceleration OK (RCS=%s BCS=%s VCS=%s)",
                 fRingRCS ? "yes" : "no",
@@ -4341,14 +4468,14 @@ bool MyIntelGPU::start(IOService *provider)
             IOService *vcsNub = new IOService;
             if (vcsNub && vcsNub->init()) {
                 vcsNub->attach(this);
-                vcsNub->setName(DEC_BUFFER_VCS);
-                vcsNub->setProperty(DEC_BUFFER_IOUserClient, DEC_BUFFER_VCSClient);
+                vcsNub->setName("MyIntelVCS");
+                vcsNub->setProperty("IOUserClientClass", "MyIntelVCSClient");
                 vcsNub->setProperty("IOProviderClass", "IOService");
                 vcsNub->registerService();
                 vcsNub->release();
-                IODebug("Phase 6b: %s nub published — user-space can open VCS", DEC_BUFFER_VCS);
+                IODebug("Phase 6b: %s nub published — user-space can open VCS", "MyIntelVCS");
             } else {
-                IODebug("Phase 6b: %s nub alloc/init failed", DEC_BUFFER_VCS);
+                IODebug("Phase 6b: %s nub alloc/init failed", "MyIntelVCS");
                 if (vcsNub) vcsNub->release();
             }
         }
@@ -4439,7 +4566,7 @@ bool MyIntelGPU::start(IOService *provider)
 
     startPhase7Media();
 
-    setProperty(DEC_BUFFER_IOUserClient, DEC_BUFFER_GPUClient);
+    setProperty("IOUserClientClass", "MyIntelGPUClient");
     registerService();
 
     /*
