@@ -1,0 +1,29 @@
+
+Name     : Intel® Smart Sound Technology for Digital Microphones
+DeviceID : INTELAUDIO\CTLR_DEV_51CA&LINKTYPE_02&DEVTYPE_00&VEN_8086&DEV_AE20&SUBSYS_192E1025&REV_10EC\5&2042FF5C&0&0000DIF_000A&UIF_0000
+Status   : OK
+
+Name     : Intel® Smart Sound Technology OED
+DeviceID : INTELAUDIO\DSP_CTLR_DEV_51CA&VEN_8086&DEV_0222&SUBSYS_192E1025&REV_0001\4&303015E5&0&0800DIF_000A&UIF_0000
+Status   : OK
+
+Name     : Intel® Smart Sound Technology Detection Verification
+DeviceID : INTELAUDIO\DIF_0000&UIF_0000&CTLR_DEV_51CA&VEN_8086&DETECTIONVERIFICATION\5&2042FF5C&0&DIF_0000&UIF_0000
+Status   : OK
+
+Name     : Intel® Smart Sound Technology for USB Audio
+DeviceID : INTELAUDIO\CTLR_DEV_51CA&LINKTYPE_06&DEVTYPE_06&VEN_8086&DEV_AE50&SUBSYS_192E1025&REV_0001\0603DIF_000A&UIF_0000
+Status   : OK
+
+Name     : Microphone Array (Intel® Smart Sound Technology for Digital Microphones)
+DeviceID : SWD\MMDEVAPI\{0.0.1.00000000}.{DD3BD8EB-19B9-46D6-B3CB-9C94CD883F4C}
+Status   : OK
+
+Name     : Intel® Smart Sound Technology for Bluetooth® Audio
+DeviceID : INTELAUDIO\CTLR_DEV_51CA&LINKTYPE_03&DEVTYPE_00&VEN_8086&DEV_AE30&SUBSYS_192E1025&REV_0001\5&2042FF5C&0&0000DIF_000A&UIF_0000
+Status   : OK
+
+Name     : Intel® Smart Sound Technology BUS
+DeviceID : PCI\VEN_8086&DEV_51CA&SUBSYS_192E1025&REV_01\3&11583659&0&FB
+Status   : OK
+

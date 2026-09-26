@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.2.0</string>
+	<string>1.1.1</string>
 	<key>CFBundleVersion</key>
-	<string>3.2.0</string>
+	<string>1.1.8</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_Framebuffer</key>
@@ -26,6 +26,17 @@
 			<string>com.pongpan-bk.MyIntelGPU</string>
 			<key>IOClass</key>
 			<string>MyIntelFramebuffer</string>
+			<key>IOConsoleLockFB</key>
+			<true/>
+			<key>IOFBConnectorInfo</key>
+			<data>
+			AAAAAAEAAAABAAAAAAEAAAABAAAABQAAAAEAAAABAAAABQAAAAEA
+			AAABAAAABQAAAAEAAAABAAAABQ==
+			</data>
+			<key>IOFBConnectorType</key>
+			<integer>1</integer>
+			<key>IOFBIsPrimary</key>
+			<true/>
 			<key>IOMatchCategory</key>
 			<string>IOFramebuffer</string>
 			<key>IOPCIClassMatch</key>
@@ -50,7 +61,7 @@
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
 			<key>IOGLBundleName</key>
-			<string>AppleIntelKBLGraphicsGLDriver</string>
+			<string>AppleIntelKBLGraphicsGLDriver.bundle</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
 			<key>IOPCIClassMatch</key>
@@ -63,14 +74,14 @@
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>
-			rKcAAA==
+			EAAAAA==
 			</data>
 			<key>MetalPluginName</key>
-			<string>AppleIntelKBLGraphicsMTLDriver</string>
+			<string>AppleIntelKBLGraphicsMTLDriver.bundle</string>
 			<key>MetalStatisticsName</key>
-			<string>Intel Iris Xe </string>
+			<string>Raptor Lake-P</string>
 			<key>model</key>
-			<string>Intel Iris Xe </string>
+			<string>Integrated GPU</string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
