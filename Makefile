@@ -1,7 +1,7 @@
 TARGET = MyIntelGPU
 CC = cc
 
-# กำหนดพาธไปยังซอร์สโค้ด/เฮดเดอร์ของ Lilu (แนะนำให้โคลนคลัง Lilu ไว้ข้างๆ โฟลเดอร์โปรเจกต์นี้)
+# กำหนดพาธไปยังโฟลเดอร์ Lilu (ใช้สำหรับอ้างอิง Headers)
 LILU_PATH = ../Lilu
 
 CXXFLAGS = -std=c++11 \
@@ -25,20 +25,19 @@ CXXFLAGS = -std=c++11 \
     -I$(LILU_PATH)/Headers \
     -I$(LILU_PATH)/Sources
 
-# ปรับปรุง LDFLAGS ให้เข้ากันได้กับข้อกำหนดสถาปัตยกรรมของ Lilu Plugin
-# ขจัดสัญลักษณ์สถิตที่ระบุตำแหน่งตายตัวออกเพื่อให้ระบบปลั๊กอินสับเปลี่ยน API ได้ง่าย
+# ลิงก์โครงสร้างระบบในระดับแมปส่วนหัว ไม่ต้องคอมไพล์ซอร์สข้ามโฟลเดอร์
 LDFLAGS = -Xlinker -kext \
     -nostdlib \
     -lkmod \
     -r
 
+# เอาเฉพาะไฟล์ในโปรเจกต์ของคุณมารวมกัน (ไม่ดึงไฟล์ .cpp ของ Lilu มาปน)
 SRC = MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
     MyIntelAccelerator.cpp MyIntelMedia.cpp \
     MyIntelRing.cpp MyIntelGEMBuffer.cpp MyIntelGPUClient.cpp \
-    MyIntelVCSCommand.cpp MyIntelVCSClient.cpp \
-    $(LILU_PATH)/Sources/kern_api.cpp \
-    $(LILU_PATH)/Sources/kern_util.cpp
+    MyIntelVCSCommand.cpp MyIntelVCSClient.cpp
 
+# กำหนดไฟล์วัตถุ .o ให้อยู่เฉพาะในโฟลเดอร์โปรเจกต์ปัจจุบัน
 OBJ = $(SRC:.cpp=.o)
 
 all: $(TARGET).kext/Contents/MacOS/$(TARGET)
@@ -56,8 +55,8 @@ $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.pli
 	mkdir -p "$(TARGET).kext/Contents/MacOS"
 	$(CC) $(CXXFLAGS) $(LDFLAGS) -o "$@" $(OBJ)
 	ls -la "$(TARGET).kext/Contents/MacOS/"
-	@echo "─── Build complete (Lilu Plugin Mode): $(TARGET).kext  ───"
+	@echo "─── Build complete (Lilu Headers Mode): $(TARGET).kext ───"
 
 clean:
-	rm -f *.o $(LILU_PATH)/Sources/*.o
+	rm -f *.o
 	rm -rf $(TARGET).kext
