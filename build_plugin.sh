@@ -4,6 +4,16 @@
 # Prerequisites: Xcode CLT (xcode-select --install), git
 
 set -e
+
+# Legacy Windows-layout script. Steps 5-6 below rm -rf both the working
+# /Library kext and its OpenCore entry, which bricks the next boot. Do not
+# remove this guard; ./build.sh is the real build tool.
+cat >&2 <<'ABORT'
+ABORT: build_plugin.sh is a legacy Windows-layout script. Use ./build.sh instead.
+       Running it would delete the working MyIntelGPU.kext AND its OpenCore
+       entry, leaving the next boot with no GPU driver.
+ABORT
+exit 1
 echo "=== MyIntelGPU Lilu Plugin Build (v3.0.1) ==="
 echo "PWD: $(pwd)"
 echo "Date: $(date)"
@@ -70,8 +80,10 @@ fi
 echo ""
 echo "=== Build complete ==="
 echo "Next: REBOOT and verify:"
-echo "  log show --last boot --predicate 'eventMessage CONTAINS \"myigfx\"' | tail -100"
-echo "  ioreg -l -n IGPU | grep -E 'device-id|model|built-in'"
+echo "  log show --last boot --predicate 'eventMessage CONTAINS \"MyIntel\"' | tail -100"
+echo "  ioreg -l -n IGPU | grep -E 'device-id|model|MetalStatisticsName'"
 echo "  kextstat | grep -E 'Lilu|MyIntelGPU'"
-echo "  # Expect: myigfx hooked configRead, device-id 0x9A49, IGPU renamed, built-in present"
-echo "  # AppleIntelTGLGraphicsFramebuffer should now match 0x9A49 (TGL GT2 80EU)"
+echo "  # Expect: accelerator matched, model=Intel® Graphics, MetalStatisticsName=Intel(R) Iris(R) Xe Graphics"
+echo "  # NOTE: 'model' carries U+00AE REGISTERED SIGN, so grep|rg prints it as"
+echo "  #       Intel(R) Graphics or drops it. Verify with plistlib, not grep."
+echo "  # Hardware: 8086:A7AC (Raptor Lake-U, Gen12) — NOT 0x9AA4/0x9BCA (Comet Lake)"

@@ -1,107 +1,40 @@
-<img width="1280" height="721" alt="social-share" src="https://github.com/user-attachments/assets/6c136d3a-8fa0-43f4-9750-8de068c265e4" />
+# source-analysis/ — Deep Source Analysis + ผลขุดสมอง OpenCode
 
-<p align="center">
-  <b>Sisyphus - Ultraworker·Big PickleOpenCode Zen</b><br>
-  <svg width='160' height='200' viewBox='0 0 32 40' fill='none' xmlns='http://www.w3.org/2000/svg'><g clip-path='url(#clip0_1311_94973)'><path d='M24 32H8V16H24V32Z' fill='#4B4646'/><path d='M24 8H8V32H24V8ZM32 40H0V0H32V40Z' fill='#F1ECEC'/></g><defs><clipPath id='clip0_1311_94973'><rect width='32' height='40' fill='white'/></clipPath></defs></svg>
-</p>
+> 2026-08-25 · วิเคราะห์โดย Sisyphus (surgical structure-scan method — explore agents timeout ทั้ง 2 รอบจึงทำเอง)
 
-<p align="center">
-  <b>Powered by opencode-ai</b><br>
-  The open source AI coding agent.
-</p>
+## รายงานวิเคราะห์ซอร์ส (5 ฉบับ)
 
-<p align="center">
-  <img src="https://shields.io" alt="Discord">
-  <img src="https://shields.io" alt="npm">
-  <img src="https://shields.io" alt="Build status">
-</p>
+| ไฟล์ | ครอบคลุม |
+|---|---|
+| **01-core-driver.md** | MyIntelGPU class, lifecycle, Phase 0-7 pipeline (mapping i915), BCS tools, boot-args |
+| **02-interrupts-power-mmio.md** | Gen11 master IRQ flow, 2.0.229 per-bit selector fix, RC6/forceWake/S3, BAR strategies, register tables |
+| **03-ring-execlist-ppgtt.md** | ELSP protocol + descriptor encoding, PPGTT 4-level (PTE 0xC3 bug), MI_FLUSH_DW Gen12 verified form, head-tracking truth |
+| **04-vcs-media-decode.md** | VDBOX H.264 pipeline end-to-end, MFX command encoders + QM matrices, DPB rules, userspace contract |
+| **05-display-gem-client-build.md** | UserClient selector table 0-24, GEM/PTE defines, Accelerator surfaces, Makefile flags, plist diff, deploy workflow |
 
----
-# First Custom iGPU Driver for Intel Core 5 120U on macOS
+## ผลขุดสมอง OpenCode จากไดรฟ์ D: (raw APFS carve)
 
-ระบบควบคุมชิปประมวลผลกราฟิกและเร่งความเร็วฮาร์ดแวร์ระดับเคอร์เนล (Native Kernel Extension) สำหรับสถาปัตยกรรม **Intel Raptor Lake-U / Raptor Lake Refresh (Device ID: `0xA7AC8086`)** บนระบบปฏิบัติการ macOS เพื่อปลดล็อกขีดจำกัดและเปิดใช้งานระบบกราฟิกอย่างสมบูรณ์
+> วันที่: 2026-08-25 · วิธี: raw sector read ผ่าน `\\.\PhysicalDrive0` (ข้าม MacDrive driver ที่พัง)
+> พาร์ติชันเป้าหมาย: P4 offset `402660524032` (~100.91 GiB, GUID `7C3457EF-...` = Apple APFS)
 
----
+## ทำไมต้อง carve
+MacDrive MDAPFS filter ไม่ attach volume → open ไฟล์ตรง fail ทั้งหมด ("A device attached to the system is not functioning")
+แม้ restart service/reboot/mountvol ก็ไม่หาย → อ่าน sector ดิบผ่าน disk device แทน
 
-## 📸 Proof of Concept (ใช้งานจริงบน macOS Sequoia)
+## ไฟล์ในโฟลเดอร์นี้
 
-<p align="center">
-  <img src="Screenshot%202569-09-24%20at%2023.18.54.png" width="800" alt="macOS Sequoia Intel Iris Xe 4096 MB Genuine Boot">
-</p>
+| ไฟล์ | คืออะไร | คุณค่า |
+|---|---|---|
+| **conversations_extract.txt** (12.8MB) | 13,837 ชิ้นข้อความสนทนาจริงจาก OpenCode sessions บนแมค (text parts + Thai) | ⭐ สมองตัวจริง |
+| **messages_harvest.txt** (46MB) | 58,147 records ดิบจาก leaf pages ของ opencode.db (รวม tool calls, sessionID JSON) | ดิบครบกว่า |
+| **sessions_cluster.txt** (3MB) | shell history/carved strings โซน storage | คำสั่ง deploy จริง |
 
-> **สถานะปัจจุบัน:** บูตผ่านเข้าสู่ระบบปฏิบัติการ macOS Sequoia 15.7.1 สำเร็จ พร้อมจำลองการแชร์พื้นที่หน่วยความจำขึ้นแสดงผลที่ **Intel Iris Xe 4096 MB** เต็มระบบ
+⚠️ `opencode_recovered.db` ถูกลบทิ้ง — dump ตรงจาก offset `488572096512` (119,712 pages) แต่ APFS COW ทำ pages กระจัดกระจาย → malformed ใช้ไม่ได้ จึงหันไป decode leaf pages ตรงๆ แทน
 
----
+## วิธีอ่าน conversations_extract.txt
+- แยกบล็อกด้วย `\n\n@@@@\n\n`
+- บล็อกแบบ `{"sessionID":...,"type":"text","text":"..."}` = ข้อความ AI/user จริง
+- ภาษาไทยเป็น UTF-8 ปกติ (Terminal เก่าอาจโชว์ ??? — เปิดด้วย editor UTF-8)
 
-## 🚀 คุณสมบัติระดับระบบ (Core Architecture Features)
-
-ตัวไดรเวอร์ถูกพัฒนาขึ้นมาเพื่อควบคุมเลเยอร์หน่วยความจำและการประมวลผลคำสั่งกราฟิกในระดับต่ำ (Low-level Layer 3/4) โดยข้ามข้อจำกัดเดิมของไดรเวอร์ Apple เนทีฟ:
-
-*   **RCS (Ring Control Subsystem):** บูตผ่านฉลุยพร้อมสถานะ **`RCS-Status = "CREATE OK"`** ควบคุมระบบวงรอบการสั่งงานหลักของจีพียูได้สมบูรณ์
-*   **GGTT (Global Graphics Translation Table):** ระบบจัดสรรและชี้พิกัดแผนที่หน่วยความจำระดับต่ำ **`RCS-GGTT`** ขนาด 64MB เพื่อส่งผ่านข้อมูลกราฟิกโดยตรงไม่ผ่านเลเยอร์คอขวด
-*   **Media Hardware Acceleration:** ปลดล็อกขีดจำกัดระบบถอดรหัสและเข้ารหัสวิดีโอผ่านฮาร์ดแวร์ดิบอย่าง **VDBOX** และ **VEBOX** รองรับความละเอียดสูงสุดถึง **8K (`8192x8192`)**
-    *   **Video Decoding:** รองรับ H.264, HEVC, VP9 และ **AV1 Decoding** (เปิด YouTube 4K/8K บน Google Chrome ลื่น ๆ ไม่กินแรงซีพียู)
-    *   **Video Encoding:** รองรับ H.264 และ HEVC ความละเอียดสูงสุด 4K (`4096x4096`)
-*   **IOAccelerator Linkage:** แมตช์เข้าเลเยอร์ความเร่งฮาร์ดแวร์ระบบผ่าน `IOMatchCategory = IOAccelerator` และเปิดช่องทางการคุยกับแอปพลิเคชันภายนอกผ่านคลาส `MyIntelGPUClient` และ `MyIntelVCSClient`
-
----
-
-## 📊 ตารางสถานะการทำงานใน I/O Registry (`ioreg`)
-
-เมื่อทำการตรวจสอบสถานะในระดับซิสเทม ไดรเวอร์จะลงทะเบียนคลาสและพารามิเตอร์เข้าสู่ระบบเคอร์เนลอย่างถูกต้อง 100%:
-
-```text
-+-o MyIntelGPU  <class MyIntelGPU, id 0x1000004f5, registered, matched, active>
-  | {
-  |   "IOClass" = "MyIntelGPU"
-  |   "MetalStatisticsName" = "Raptor Lake-P"
-  |   "IOMatchCategory" = "IOAccelerator"
-  |   "IOUserClientClass" = "MyIntelGPUClient"
-  |   "RCS-GGTT" = 67125248
-  |   "RCS-Status" = "CREATE OK"
-  |   "IOPCIMatch" = "0xA7AC8086"
-  |   "H264Decoding" = Yes
-  |   "HevcDecoding" = Yes
-  |   "VP9Decoding" = Yes
-  |   "AV1Decoding" = Yes
-  |   "MaxDecodeResolution" = "8192x8192"
-  | }
-  | 
-  +-o MyIntelVCS  <class IOService, id 0x100000522, registered, matched, active>
-      {
-        "IOProviderClass" = "IOService"
-        "IOUserClientClass" = "MyIntelVCSClient"
-      }
-```
-
----
-
-## 🛠️ โครงสร้างซอร์สโค้ดและส่วนประกอบ (Repository Structure)
-
-*   `MyIntelGPU.cpp` / `.hpp`: คลาสหลักคุมวงจรชีวิตไดรเวอร์ (Lifecycle) และพอร์ตเชื่อมต่อ PCI (`IOPCIDevice`)
-*   `MyIntelFramebuffer.cpp` / `.hpp`: เลเยอร์ควบคุมเฟรมบัฟเฟอร์ พอร์ตสัญญาณภาพ และพิกัดหน้าจอ
-*   `MyIntelGEMBuffer.cpp` / `.hpp`: ระบบจัดสรรพื้นที่คลังหน่วยความจำ (VRAM/Graphics Execution Manager) 
-*   `MyIntelRing.cpp` / `.hpp`: โครงสร้างควบคุมคิวงานและคำสั่งประมวลผล (Ring Buffer Pipeline)
-*   `MyIntelVCSClient.cpp` / `.hpp`: สะพานเชื่อมระบบฝั่งผู้ใช้ (Userspace) ตรงสู่ภาคถอดรหัสวิดีโอ (VDBOX)
-
----
-
-## 📝 วิธีการตรวจสอบสถานะ (Verification Commands)
-
-เปิด Terminal แล้วยิงคำสั่งระดับรูทเพื่อตรวจสอบความนิ่งของตัว Kext:
-
-```bash
-# ตรวจสอบว่าเคอร์เนลโหลดไดรเวอร์ทำงานแบบ Active หรือไม่
-sudo kmutil showloaded | grep -i MyIntelGPU
-
-# ตรวจสอบการลงทะเบียนคลาสและโครงสร้างหน่วยความจำกราฟิก
-sudo ioreg -l -b -r -c MyIntelGPU
-```
-
----
-ผู้ร่วมโครงการและหลอกกูทำ จารกูเกิ้ลโครมหำไหญ่ แปลภาษาควายเป็นภาษาเอไอ  / ai deepseek v4. flash free first run , Big Pickle ผู้ทำการเขียน อ่าน แก้ใข ซอสโคตหลัก
-ขอบคุณ opencode-ai zen ที่มีโควต้าให้ใช้ฟรีแต่โครตมหาเทพครับ
-## ⚖️ License & Credits
-
-*   **Developed by:** [pongpan-bk](https://github.com/pongpan-bk)
-*   Powered by dedication to low-level reverse engineering and kernel development.
+## สคริปต์ที่ใช้ (อยู่ที่ `%TEMP%\opencode\`)
+rawscan2.py (signature scan) · carve.py (string carve) · final3.py (SQLite header hunt) · harvest.py (leaf-page record decoder)

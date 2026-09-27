@@ -20,6 +20,23 @@
 #define kIOFBPowerStateOn       1
 #endif
 
+#define MYFB_PW_OFF             0
+#define MYFB_PW_ON_IDLE         1
+#define MYFB_PW_ON              2
+
+/* Positional order: version, capabilityFlags, outputPowerCharacter,
+   inputPowerRequirement, then 8 unused-to-zero fields. kIOPMDeviceUsable
+   (0x8000) in MYFB_PW_ON is the bit that was missing: without it the child
+   AppleDisplay stays pinned at CurrentPowerState=0. Measured on this machine —
+   .Display_boot 32784 (0x8010), its AppleDisplay 49152 (0xC000), ours 0. */
+static IOPMPowerState gFBPowerStates[] = {
+    { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, kIOPMPowerOn, kIOPMPowerOn, kIOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, kIOPMPowerOn | kIOPMDeviceUsable,
+           kIOPMPowerOn | kIOPMDeviceUsable,
+           kIOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0 },
+};
+
 #define FBLog(fmt, ...) \
     IOLog("MyIntelFB: [%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
@@ -127,6 +144,16 @@ bool MyIntelFramebuffer::start(IOService *provider)
     mygpuProgress("mfb:vram-desc");
     publishIORegistryProperties();
     mygpuProgress("mfb:publish");
+
+    PMinit();
+    provider->joinPMtree(this);
+    IOReturn perr = registerPowerDriver(this, gFBPowerStates,
+                                        sizeof(gFBPowerStates) / sizeof(gFBPowerStates[0]));
+    FBLog("registerPowerDriver -> 0x%x", perr);
+    if (perr == kIOReturnSuccess) {
+        changePowerStateToPriv(MYFB_PW_ON);
+        FBLog("requested power state %d", MYFB_PW_ON);
+    }
 
     registerService(kIOServiceAsynchronous);
     mygpuProgress("mfb:register-service");
@@ -593,27 +620,33 @@ void MyIntelFramebuffer::setBrightness(UInt32 brightness)
     }
 }
 
-IOReturn MyIntelFramebuffer::performPowerStateChange(
-        IOIndex connectIndex,
-        UInt32 powerState)
+IOReturn MyIntelFramebuffer::setPowerState(
+        unsigned long powerStateOrdinal,
+        IOService *   whatDevice)
 {
-    (void)connectIndex;
-    if (powerState == kIOFBPowerStateOn) {
+    IOReturn result = super::setPowerState(powerStateOrdinal, whatDevice);
+
+    if (powerStateOrdinal >= MYFB_PW_ON) {
         fPowerOnCount++;
         fDisplayOn = true;
-        FBLog("power ON");
         if (fGPU) {
             fGPU->gpuResume();
         }
+        handleEvent(kIOFBNotifyDidPowerOn, 0);
     } else {
-        fPowerOffCount++;
-        FBLog("power OFF");
-        if (fGPU) {
-            fGPU->gpuSuspend();
+        handleEvent(kIOFBNotifyWillPowerOff, 0);
+        fDisplayOn = (powerStateOrdinal == MYFB_PW_ON_IDLE);
+        if (!fDisplayOn) {
+            fPowerOffCount++;
+            if (fGPU) {
+                fGPU->gpuSuspend();
+            }
         }
-        fDisplayOn = false;
     }
-    return kIOReturnSuccess;
+
+    FBLog("setPowerState -> ordinal=%lu (on=%d) super=0x%x",
+          powerStateOrdinal, fDisplayOn ? 1 : 0, result);
+    return result;
 }
 
 void MyIntelFramebuffer::dumpDiagnostics(void) const

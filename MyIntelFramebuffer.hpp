@@ -64,7 +64,7 @@ public:
             IODisplayModeID displayMode,
             IOIndex depth) override;
 
-    /* Non-Pure Virtual Overrides */
+/* Non-Pure Virtual Overrides */
     virtual UInt32 getDisplayModeCount(void) override;
     virtual IOReturn getDisplayModes(IODisplayModeID *allDisplayModes) override;
     virtual IOReturn getCurrentDisplayMode(
@@ -93,12 +93,16 @@ public:
             IOIndex connectIndex,
             IOSelect key,
             uintptr_t value) override;
-    virtual bool hasDDCConnect(IOIndex connectIndex) override;
+virtual bool hasDDCConnect(IOIndex connectIndex) override;
     virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
                     IOSelect blockType, IOOptionBits options,
                     UInt8 * data, IOByteCount * length) override;
 
-    /* Public */
+    virtual IOReturn setPowerState(
+            unsigned long powerStateOrdinal,
+            IOService *   whatDevice) override;
+
+/* Public */
     void handleVblank(void);
     void setBrightness(UInt32 brightness);
     IOReturn performPowerStateChange(

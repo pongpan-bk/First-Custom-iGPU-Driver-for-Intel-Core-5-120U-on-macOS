@@ -398,12 +398,19 @@ again:
         start = h264_find_sc(it->buf, it->len, it->pos);
     }
     if (start >= it->len) { it->pos = it->len; return false; }
-    uint32_t nextSc = h264_find_sc(it->buf, it->len, start);
-    /* ตัด trailing zeros (ส่วนหัวของ start code ถัดไป) ออก */
-    uint32_t bodyEnd = nextSc;
+    uint32_t nextScHeader = h264_find_sc(it->buf, it->len, start);
+    uint32_t bodyEnd = nextScHeader;
+    if (bodyEnd >= 4 && it->buf[bodyEnd - 4] == 0 &&
+        it->buf[bodyEnd - 3] == 0 && it->buf[bodyEnd - 2] == 0 &&
+        it->buf[bodyEnd - 1] == 1) {
+        bodyEnd -= 4;
+    } else if (bodyEnd >= 3 && it->buf[bodyEnd - 3] == 0 &&
+               it->buf[bodyEnd - 2] == 0 && it->buf[bodyEnd - 1] == 1) {
+        bodyEnd -= 3;
+    }
     while (bodyEnd > start && it->buf[bodyEnd - 1] == 0) bodyEnd--;
-    it->pos = nextSc;
-    it->pending = nextSc;                 /* NAL header ตัวถัดไป (ถ้ามี) */
+    it->pos = nextScHeader;
+    it->pending = nextScHeader;           /* NAL header ตัวถัดไป (ถ้ามี) */
     if (bodyEnd <= start) goto again;     /* body ว่าง — ข้าม */
     *nal = it->buf + start;
     *nalLen = bodyEnd - start;
