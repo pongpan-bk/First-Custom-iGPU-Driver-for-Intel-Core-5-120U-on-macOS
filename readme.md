@@ -1,29 +1,5 @@
-# source-analysis/ — Deep Source Analysis + ผลขุดสมอง OpenCode
-
-> 2026-08-25 · วิเคราะห์โดย Sisyphus (surgical structure-scan method — explore agents timeout ทั้ง 2 รอบจึงทำเอง)
-
-Last login: Mon Sep 28 03:37:56 on ttys000
-/Users/ppbk/Desktop/เทส/ArchitecturalDiagnostic-MasterEngine.command ; exit;
-ppbk@MacBook-Pro ~ % /Users/ppbk/Desktop/เทส/ArchitecturalDiagnostic-MasterEngine.command ; exit;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+<img width="299" height="168" alt="images" src="https://github.com/user-attachments/assets/9dcb4149-e16d-44c4-86a9-0299253a002a" />
+powered by opencode-ai deepseek,big-pickle all ai model zen free
 
 ==========================================================================================
     IntelReviveGPU BARE-METAL & ARCHITECTURAL ULTIMATE FORENSIC SUITE [THE MASTER ENGINE]  
