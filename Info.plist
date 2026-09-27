@@ -19,7 +19,7 @@
 	<key>CFBundleVersion</key>
 	<string>4.0.1</string>
 	<key>CFBundleGetInfoString</key>
-	<string>Intel Xe Graphics Driver with Metal Support</string>
+	<string>Intel® Graphics</string>
 	
 	<key>IOKitPersonalities</key>
 	<dict>
@@ -34,7 +34,7 @@
 			<key>IOPCIClassMatch</key>
 			<string>0x03000000&amp;0xff000000</string>
 			<key>IOPCIMatch</key>
-			<string>0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
+			<string>0xA7AC8086</string>
 			<key>IOProbeScore</key>
 			<integer>20000</integer>
 			<key>IOProviderClass</key>
@@ -60,9 +60,9 @@
 			<integer>0</integer>
 			
 			<key>MetalStatisticsName</key>
-			<string>Intel® Iris® Xe Graphics (80EU)</string>
+			<string>Intel® Graphics</string>
 			<key>MetalDeviceName</key>
-			<string>Intel Iris Xe Graphics</string>
+			<string>Intel® Graphics</string>
 			<key>MetalDeviceVendor</key>
 			<string>Intel Corporation</string>
 			<key>MetalVersion</key>
@@ -111,7 +111,7 @@
 			<true/>
 			
 			<key>model</key>
-			<string>Intel Iris Xe Graphics 80EU (Raptor Lake-P)</string>
+			<string>Intel® Graphics</string>
 			
 			<key>VRAM,totalMB</key>
 			<integer>4096</integer>
