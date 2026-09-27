@@ -94,8 +94,3 @@
 	<string>Root</string>
 </dict>
 </plist>
-
-	<key>OSKextExcludeAllPersonalities</key>
-	<false/>
-</dict>
-</plist>
