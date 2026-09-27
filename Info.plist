@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -15,9 +15,12 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1.3</string>
+	<string>3.1.6</string>
 	<key>CFBundleVersion</key>
-	<string>3.1.38</string>
+	<string>3.1.6</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Intel Xe Graphics Driver with Metal Support</string>
+	
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_GPU</key>
@@ -31,66 +34,145 @@
 			<key>IOPCIClassMatch</key>
 			<string>0x03000000&amp;0xff000000</string>
 			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
+			<string>0x20a78086 0x21a78086 0xa0a78086 0xa1a78086 0xa2a78086 0xa3a78086 0xa8a78086 0xa9a78086 0xaaa78086 0xaba78086 0x26a78086 0xa7ac8086</string>
 			<key>IOProbeScore</key>
 			<integer>20000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>
-			EAAAAA==
+			AAAAAA==
 			</data>
-			<key>MetalPluginName</key>
-			<string>AppleIntelKBLGraphicsMTLDriver.bundle</string>
-			<key>IOGLBundleName</key>
-			<string>AppleIntelKBLGraphicsGLDriver.bundle</string>
+			
+			<!-- METAL SUPPORT SECTION -->
+			<key>MetalPluginClassName</key>
+			<string>IntelXeMetalPlugin</string>
+			<key>MetalPluginBundleName</key>
+			<string>IntelXeMetal.bundle</string>
+			
+			<key>IOAccelTypes</key>
+			<array>
+				<string>Metal</string>
+				<string>OpenGL</string>
+				<string>Video</string>
+			</array>
+			<key>IOAccelIndex</key>
+			<integer>0</integer>
+			
 			<key>MetalStatisticsName</key>
-			<string>Raptor Lake-P</string>
+			<string>Intel® Iris® Xe Graphics (80EU)</string>
+			<key>MetalDeviceName</key>
+			<string>Intel Iris Xe Graphics</string>
+			<key>MetalDeviceVendor</key>
+			<string>Intel Corporation</string>
+			<key>MetalVersion</key>
+			<string>3.0</string>
+			<key>MetalFeatureSet</key>
+			<string>macOS_GPUFamily2_v1</string>
+			
+			<key>MetalMaxTextureSize</key>
+			<integer>16384</integer>
+			<key>MetalMaxBufferLength</key>
+			<integer>1073741824</integer>
+			<key>MetalMaxThreadsPerThreadgroup</key>
+			<integer>1024</integer>
+			<key>MetalMaxColorRenderTargets</key>
+			<integer>8</integer>
+			<key>MetalMaxVertexAttributes</key>
+			<integer>31</integer>
+			
+			<key>MetalSupportsRayTracing</key>
+			<true/>
+			<key>MetalSupportsMeshShaders</key>
+			<true/>
+			<key>MetalSupportsTileShaders</key>
+			<true/>
+			<key>MetalSupportsVariableRateShading</key>
+			<true/>
+			<key>MetalSupportsIndirectCommandBuffers</key>
+			<true/>
+			<key>MetalSupportsPrimitiveID</key>
+			<true/>
+			
+			<key>IOVideoTypes</key>
+			<array>
+				<string>H264</string>
+				<string>HEVC</string>
+				<string>VP9</string>
+				<string>AV1</string>
+			</array>
+			<key>IOGVAH264Decode</key>
+			<true/>
+			<key>IOGVAHEVCDecode</key>
+			<true/>
+			<key>IOGVAVP9Decode</key>
+			<true/>
+			<key>IOGVAAV1Decode</key>
+			<true/>
+			
 			<key>model</key>
-			<string>Integrated GPU</string>
-		</dict>
-		<key>Universal_AutoMatch_Framebuffer</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.pongpan-bk.MyIntelGPU</string>
-			<key>IOClass</key>
-			<string>MyIntelFramebuffer</string>
-			<key>IOMatchCategory</key>
-			<string>IOFramebuffer</string>
-			<key>IOPCIClassMatch</key>
-			<string>0x03000000&amp;0xff000000</string>
-			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
-			<key>IOProbeScore</key>
-			<integer>20000</integer>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-			<key>device-id</key>
-			<data>
-			rKcAAA==
-			</data>
-			<key>framebuffer-patch-enable</key>
-			<integer>1</integer>
+			<string>Intel Iris Xe Graphics 80EU (Raptor Lake-P)</string>
+			
+			<key>VRAM,totalMB</key>
+			<integer>4096</integer>
+			<key>VRAM,memSize</key>
+			<integer>4294967296</integer>
+			
+			<key>CoreClockMHz</key>
+			<integer>1300</integer>
+			<key>MemoryClockMHz</key>
+			<integer>1600</integer>
+			<key>ShaderCores</key>
+			<integer>80</integer>
+			
+			<key>IOGLBundleName</key>
+			<string>MyIntelGPU</string>
+			<key>IOSurfaceSupport</key>
+			<true/>
+			<key>IOSurfaceAccelerator</key>
+			<true/>
 		</dict>
 	</dict>
+	
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>600.0.0</string>
+		<key>com.apple.iokit.IOAcceleratorFamily2</key>
+		<string>500.0.0</string>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>300.0.0</string>
+		<key>com.apple.iokit.IOGraphicsAccelerator2</key>
+		<string>200.0.0</string>
+		<key>com.apple.iokit.IOSurface</key>
+		<string>300.0.0</string>
+		<key>com.apple.iokit.IOSurfaceAccelerator</key>
+		<string>100.0.0</string>
+		<key>com.apple.driver.AppleGraphicsControl</key>
+		<string>200.0.0</string>
+		<key>com.apple.driver.AppleGraphicsDeviceControl</key>
+		<string>200.0.0</string>
+		<key>com.apple.driver.AppleGraphicsPowerManagement</key>
+		<string>200.0.0</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>23.0.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>23.0.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>23.0.0</string>
+	</dict>
+	
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
 	<key>OSBundleAllowUserLoad</key>
 	<true/>
-	<key>OSBundleLibraries</key>
-	<dict>
-		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>2.1</string>
-		<key>com.apple.iokit.IOPCIFamily</key>
-		<string>1.0</string>
-		<key>com.apple.kpi.bsd</key>
-		<string>10.0.0d0</string>
-		<key>com.apple.kpi.iokit</key>
-		<string>10.0.0d0</string>
-		<key>com.apple.kpi.libkern</key>
-		<string>10.0.0d0</string>
-	</dict>
 	<key>OSBundleRequired</key>
-	<string>Root</string>
+	<string>Local-Root</string>
+	<key>OSBundleCompatibleVersion</key>
+	<string>3.1.0</string>
+	<key>OSKextSigningExcludeAll</key>
+	<false/>
+	<key>OSKextExcludeAllPersonalities</key>
+	<false/>
 </dict>
 </plist>
