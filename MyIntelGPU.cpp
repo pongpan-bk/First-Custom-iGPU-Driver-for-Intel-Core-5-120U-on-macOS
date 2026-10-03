@@ -1,3 +1,21 @@
+
+#ifndef DEC_BUFFER_VCS
+#define DEC_BUFFER_VCS "MyIntelGPUVCS"
+#endif
+#ifndef DEC_BUFFER_IOUserClient
+#define DEC_BUFFER_IOUserClient "IOUserClient"
+#endif
+#ifndef DEC_BUFFER_VCSClient
+/* MUST match the string passed to OSDefineMetaClassAndStructors() in
+ * MyIntelVCSClient.cpp. IOServiceOpen() resolves the "IOUserClient" property
+ * as a metaclass name; a mismatch here fails with kIOReturnUnsupported
+ * (0xE00002C7) and no user-space tool can ever reach the VCS client. */
+#define DEC_BUFFER_VCSClient "MyIntelVCSClient"
+#endif
+#ifndef DEC_BUFFER_GPUClient
+#define DEC_BUFFER_GPUClient "MyIntelGPUClient"
+#endif
+
 /*===========================================================================
  *  MyIntelGPU.cpp
  *  Hackintosh Kext — FakeID Alder Lake → Coffee Lake
@@ -33,6 +51,7 @@
 #include "MyIntelRing.hpp"
 #include "MyIntelGEMBuffer.hpp"   /* GEM_PAGE_SIZE for VRAM pool sizing */
 #include "MyIntelVCSClient.h"
+
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 #include <IOKit/IOLib.h>
@@ -45,9 +64,7 @@
  * Without source code these strings cannot be removed or altered. */
 static const char kMyIntelGPUCredits[] =
     "MyIntelGPU v2.0.240 | First Custom iGPU Driver for Intel Core 5 120U on macOS\n"
-    "Author: pongpan-bk | Tooling: OpenCode (OhMyOpenCode)\n"
-    "Phase 8: VCS IOUserClient pipeline — user-space H.264/HEVC command submission\n"
-    "https://github.com/pongpan-bk/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-MacOS\n";
+    "Author: pongpan-bk\n";
 
 /* 2.0.224: early-boot progress marker (see MyIntelGPU.hpp).
  * Persists the last startup phase to NVRAM so a hard boot hang can be
@@ -93,11 +110,6 @@ void mygpuProgress(const char *tag)
 extern "C" {
     static int myintelgpu_module_start(kmod_info_t *ki, void *data) { return 0; }
     static int myintelgpu_module_stop(kmod_info_t *ki, void *data)  { return 0; }
-    /* Layer 3 (-fvisibility=hidden) hides all symbols by default, but
-     * kernelmanagerd requires _kmod_info to be an EXTERNAL symbol or it
-     * refuses to place the kext in the kernel collection
-     * ("kexts must have a _kmod_info symbol"). Force default visibility. */
-    __attribute__((visibility("default")))
     kmod_info_t kmod_info = { 0, 1, -1U,                /* next, info_version, id */
         "com.myintelgpu.driver", "1.0.0",              /* name, version */
         -1, 0, 0, 0, 0,                               /* ref_count, ref_list, addr, size, hdr_size */
@@ -146,8 +158,6 @@ extern "C" {
 #define GEN11_INTR_ENGINE_INTR_MASK   0x0000FFFF
 #define GEN11_IIR_REG_SELECTOR(x)     (0x190070 + (x) * 4)
 #define GEN11_RCS0_RSVD_INTR_MASK     0x190090
-#define GEN11_BCS_RSVD_INTR_MASK      0x1900a0
-
 #define GT_RENDER_USER_INTERRUPT      (1U << 0)
 #define GT_CS_MASTER_ERROR_INTERRUPT  (1U << 3)
 #define GT_CONTEXT_SWITCH_INTERRUPT   (1U << 8)
@@ -196,22 +206,16 @@ extern "C" {
 OSDefineMetaClassAndStructors(MyIntelGPU, IOService)
 
 /*
- * IODebug — optional verbose diagnostics.
+ * IODebug — debug output kernel log
  *
- * Production builds omit these calls to reduce kernel text/string size.
- * Define MYINTELGPU_DIAGNOSTICS=1 for a diagnostic build; direct IOLog
- * error/progress messages remain available in either mode.
+ * IOLog ; comment
+ * _EXTRA_DEBUG verbose dev
+ *
+ * NOTE: os_log was reverted (see MyIntelRing.cpp) — os_log sections broke
+ * prelink/auxKC → boot failure. IOLog-only + dmesg capture (msgbuf=1MB).
  */
-#ifndef MYINTELGPU_DIAGNOSTICS
-#define MYINTELGPU_DIAGNOSTICS 0
-#endif
-
-#if MYINTELGPU_DIAGNOSTICS
 #define IODebug(fmt, ...) \
     do { IOLog("MyIntelGPU: [%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__); } while(0)
-#else
-#define IODebug(fmt, ...) do { } while (0)
-#endif
 
 // #define EXTRA_DEBUG /* log translate address */
 
@@ -259,8 +263,6 @@ bool MyIntelGPU::init(OSDictionary *dict)
     fRevision     = 0;
     fGraphicsVer  = 0;
     fFakeGen      = 0;
-    fHardwareGeneration = 0;
-    fNativeGen10  = false;
     fUseGmdId     = false;
     fGttTotal     = 0;
     fMappableEnd  = 0;
@@ -282,6 +284,8 @@ bool MyIntelGPU::init(OSDictionary *dict)
     fGemRingBCS    = NULL;
     fRingVCS       = NULL;
     fGemRingVCS    = NULL;
+    fAccelBatchBuf = NULL;
+    fAccelBatchSrcBuf = NULL;
     fAccelInitialized = false;
     fEngineLock    = NULL;
     fEngineLockCanaryBefore = 0;
@@ -299,6 +303,8 @@ bool MyIntelGPU::init(OSDictionary *dict)
  * entry 4 fields + name pointer = init
      */
     memset(fTransTable, 0, sizeof(fTransTable));
+
+
 
     IODebug("init() — OK");
 
@@ -573,93 +579,6 @@ uint32_t MyIntelGPU::detectHardwareGeneration(void)
     }
 
     return gen;
-}
-
-#pragma mark -
-#pragma mark - Native Gen10/12 pipeline (mynative=1)
-
-/*
- *  bool MyIntelGPU::initializeGen10Hardware(OSDictionary *dict)
- *
- *  Entry point for the native Gen10/12 pipeline (boot-arg mynative=1).
- *  Cuts FakeID translation: fFakeGen=0 makes translateAddress() return
- *  every offset unchanged (guard: fFakeGen == 0 → identity) and makes
- *  buildTranslationTable() register no fake windows. Downstream GGTT
- *  init + ring creation then address the hardware on its real Gen12
- *  MMIO bases (RCS 0x2000 / BCS 0x22000 / VCS 0x1C0000 / VECS 0x1C8000)
- *  through the existing *_REAL init paths — no duplicated register
- *  programming.
- *
- *  Default OFF (fNativeGen10=false): without the boot-arg the legacy
- *  fake-gen translation behaves exactly as shipped in 3.1.35.
- */
-bool MyIntelGPU::initializeGen10Hardware(OSDictionary *dict)
-{
-    (void)dict;
-
-    if (fGraphicsVer < 10) {
-        IOLog("MyIntelGPU: mynative=1 ignored — Gen%u is not a Gen10+ GPU, keeping FakeGen=%u\n",
-              fGraphicsVer, fFakeGen);
-        return false;
-    }
-
-    fHardwareGeneration = 10;
-    fFakeGen            = 0;
-    fNativeGen10        = true;
-    setProperty("NativeGen10", fNativeGen10);
-
-    IOLog("MyIntelGPU: NATIVE Gen10/12 pipeline — FakeGen translation CUT "
-          "(identity MMIO, rings on RCS 0x%X / BCS 0x%X / VCS 0x%X / VECS 0x%X)\n",
-          RCS0_BASE_REAL, BCS0_BASE_REAL, VCS0_BASE_REAL, VECS0_BASE_REAL);
-    return true;
-}
-
-/*
- *  bool MyIntelGPU::configureGGTTForGen10(void)
- *
- *  GGTT leg of the native pipeline — idempotent wrapper around the
- *  existing ggttInitHardware() (Gen8+ path, fills fGsm/fGttTotal, maps
- *  BAR2 aperture). start() calls ggttInitHardware() before this runs,
- *  so in the normal native flow this only verifies + logs; the init
- *  branch fires only when called before GGTT setup (Code.cpp order).
- */
-bool MyIntelGPU::configureGGTTForGen10(void)
-{
-    if (!fGsm || fGttTotal == 0) {
-        if (!ggttInitHardware() || !fGsm || fGttTotal == 0) {
-            IOLog("MyIntelGPU: ERROR — Gen10 GGTT hardware init failed\n");
-            return false;
-        }
-    }
-
-    IOLog("MyIntelGPU: Gen10 GGTT ready (gsm=%p, gttTotal=%u entries, aperture=%llu MB)\n",
-          fGsm, fGttTotal, fApertureSize >> 20);
-    return true;
-}
-
-/*
- *  bool MyIntelGPU::setupExecutionRingsGen10(void)
- *
- *  Ring leg of the native pipeline — idempotent wrapper around
- *  initHardwareAcceleration(). That path already programs the engines
- *  on the REAL Gen12 bases (ringCreate(..., RCS0_BASE_REAL, ...)); with
- *  translation cut (fFakeGen=0) every readReg32/writeReg32 inside it
- *  reaches the same offsets untouched. VECS stays on VECS0_BASE_REAL
- *  (0x1C8000) — never 0x1A000, which is Coffee Lake encode and wrong
- *  for Gen12 silicon.
- */
-bool MyIntelGPU::setupExecutionRingsGen10(void)
-{
-    if (!fRingRCS && !fRingBCS && !fRingVCS && !fAccelInitialized) {
-        if (!initHardwareAcceleration()) {
-            IOLog("MyIntelGPU: ERROR — Gen10 execution ring setup failed\n");
-            return false;
-        }
-    }
-
-    IOLog("MyIntelGPU: Gen10 rings ready (RCS@0x%X BCS@0x%X VCS@0x%X VECS@0x%X, accel=%d)\n",
-          RCS0_BASE_REAL, BCS0_BASE_REAL, VCS0_BASE_REAL, VECS0_BASE_REAL, fAccelInitialized);
-    return true;
 }
 
 #pragma mark -
@@ -2003,7 +1922,7 @@ void MyIntelGPU::sEdidTimerFired(OSObject *owner, IOTimerEventSource *sender)
         IOLog("MyIntelGPU: [EDID] injected KDB0924 before WindowServer window (t+%u)\n",
               (uint32_t)(kEdidMaxRetries - self->fEdidRetries + 1));
     else if (++self->fEdidRetries < kEdidMaxRetries) {
-        if (sender) sender->setTimeoutMS(500);
+        if (sender) sender->setTimeoutMS(100);
         if (self->fEdidDebug)
             IOLog("MyIntelGPU: [EDID] retry %u/%u — display node not ready yet\n",
                   self->fEdidRetries, (uint32_t)kEdidMaxRetries);
@@ -2035,10 +1954,10 @@ void MyIntelGPU::armEDIDPassthrough(void)
         fEdidTimer = NULL;
         return;
     }
-    fEdidTimer->setTimeoutMS(1000);
+    fEdidTimer->setTimeoutMS(100);
     fEdidRetries = 0;
     if (fEdidDebug)
-        IOLog("MyIntelGPU: [EDID] passthrough ARMED (t+1s, retry every 2s up to %u tries)\n",
+        IOLog("MyIntelGPU: [EDID] passthrough ARMED (t+100ms, retry every 100ms up to %u tries)\n",
               (uint32_t)kEdidMaxRetries);
 }
 
@@ -2311,9 +2230,8 @@ bool MyIntelGPU::accelPadProps(void)
     fAccelerator->setProperty("IOAccelTypes", accTypes, 32);
     uint32_t rendererID = 0x00001002u;              /* generic accel render id */
     fAccelerator->setProperty("IOVARendererID", &rendererID, sizeof(rendererID));
-    fAccelerator->setProperty("IOGLBundleName", "MyIntelGPU");
-    IOLog("MyIntelGPU: [pad-props] injected IOAcceleratorClassName/IOAccelTypes/"
-          "IOVARendererID/IOGLBundleName onto live node\n");
+    /* Gen9 plugin binding removed — AppleIntelICLGraphics* bundles don't exist on Gen12 */
+    IOLog("MyIntelGPU: [pad-props] injected IOAcceleratorClassName/IOAccelTypes/IOVARendererID onto live node\n");
     return true;
 }
 
@@ -2346,14 +2264,14 @@ bool MyIntelGPU::accelBCSReset(void)
     ring->head = ring->tail;
 
     if (ok) {
-        writeReg32(base + RING_HEAD_REG_OFFSET, 0);
-        readReg32(base + RING_HEAD_REG_OFFSET);
-        writeReg32(base + RING_TAIL_REG_OFFSET, 0);
-        readReg32(base + RING_TAIL_REG_OFFSET);
-        writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
-        readReg32(base + RING_MODE_GEN7_OFFSET);
-        writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET, CONTEXT_STATUS_PTR_RESET);
-        readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
+         writeReg32(base + RING_HEAD_REG_OFFSET, 0);
+    readReg32(base + RING_HEAD_REG_OFFSET);
+    writeReg32(base + RING_TAIL_REG_OFFSET, 0);
+    readReg32(base + RING_TAIL_REG_OFFSET);
+    writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
+    readReg32(base + RING_MODE_GEN7_OFFSET);
+    writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET, 0x00000000u);
+    readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
     }
     if (ok && ring->hwspGgtt) {
         writeReg32(base + RING_HWS_PGA_OFFSET, ring->hwspGgtt);
@@ -2380,7 +2298,19 @@ bool MyIntelGPU::accelBCSReset(void)
 /* Hypothesis #10 — BCS blit via BATCH+BB_START: the only submission pattern
  * proven on this silicon (gem_test RCS PASS, VDBOX 400fps). Direct-ring BLT
  * placement failed across every class encoding. Batch carries one
- * XY_FAST_COPY_BLT toward the bridge scanout buffer from stolen fb. */
+ * XY_FAST_COPY_BLT toward the bridge scanout buffer from a source buffer.
+ *
+ * Ubuntu/Linux i915 pattern (intel_migrate.c emit_copy, i915_gem_client_blt.c):
+ *   1. MI_LOAD_REGISTER_IMM(1) -> BLIT_CCTL with MOCS=2 (WB L3+LLC) for src/dst
+ *   2. GEN9_XY_FAST_COPY_BLT_10DW with BLT_DEPTH_32 | pitch_bytes
+ *   3. Proper 64-bit addressing (upper 32 bits = 0 for 32-bit GGTT)
+ *   4. Source/destination are GGTT identity-mapped offsets
+ *
+ * Windows igdkmdn64.sys pattern (registry reverse-engineered):
+ *   - BLIT_CCTL programmed per-engine before blit submission
+ *   - MOCS index 2 (WB) for coherent system memory blits
+ *   - XY_FAST_COPY_BLT with linear pitch in bytes
+ */
 bool MyIntelGPU::accelBatchBlit(void)
 {
     /* Self-contained dst: bridge buf exists only under mybridge; probe must
@@ -2398,8 +2328,31 @@ bool MyIntelGPU::accelBatchBlit(void)
         IOLog("MyIntelGPU: [batchblit] lazy dst alloc ggtt=0x%08X\n",
               fBridgeBuf->ggttOffset);
     }
-    if (!fRingBCS || !fRingCallbacks || !fBridgeBuf) {
-        IOLog("MyIntelGPU: [batchblit] missing ring/cb/bridgeBuf\n");
+
+    /* Create a source buffer with a known test pattern (solid color) */
+    if (!fAccelBatchSrcBuf) {
+        fAccelBatchSrcBuf = gemBufferCreate(
+            12 * 1024 * 1024, 0,
+            (uint32_t *)fGsm, fGttTotal,
+            (void *)fApertureVA, fApertureSize,
+            &MyIntelGPU::ggttInvalidateTrampoline, this);
+        if (!fAccelBatchSrcBuf) {
+            IOLog("MyIntelGPU: [batchblit] src alloc FAILED\n");
+            return false;
+        }
+        /* Fill source with a distinct pattern (0x00FF0000 = red in XRGB) */
+        uint32_t *srcPx = (uint32_t *)fAccelBatchSrcBuf->cpuAddr;
+        const uint32_t fbBytes = 1920 * 1080 * 4;
+        for (uint32_t i = 0; i < fbBytes / 4; i++) {
+            srcPx[i] = 0x00FF0000u;  /* Red pattern */
+        }
+        clflushRange(fAccelBatchSrcBuf->cpuAddr, fbBytes);
+        IOLog("MyIntelGPU: [batchblit] lazy src alloc ggtt=0x%08X (red pattern)\n",
+              fAccelBatchSrcBuf->ggttOffset);
+    }
+
+    if (!fRingBCS || !fRingCallbacks || !fBridgeBuf || !fAccelBatchSrcBuf) {
+        IOLog("MyIntelGPU: [batchblit] missing ring/cb/bridgeBuf/srcBuf\n");
         return false;
     }
 
@@ -2413,26 +2366,60 @@ bool MyIntelGPU::accelBatchBlit(void)
             IOLog("MyIntelGPU: [batchblit] batch alloc FAILED\n");
             return false;
         }
+
+        /* Build batch buffer following Linux i915 intel_migrate.c emit_copy() pattern:
+         *   MI_LOAD_REGISTER_IMM(1) -> BLIT_CCTL (base + 0x204)
+         *   GEN9_XY_FAST_COPY_BLT_10DW with BLT_DEPTH_32 | pitch
+         *   MI_FLUSH_DW + MI_BATCH_BUFFER_END
+         */
         uint32_t *cs = (uint32_t *)fAccelBatchBuf->cpuAddr;
-        cs[0]  = 0x50800008u;                       /* XY_FAST_COPY_BLT 10dw */
-        cs[1]  = 7680u;                             /* dst pitch */
-        cs[2]  = 0;                                 /* dst x1,y1 */
-        cs[3]  = (1080u << 16) | 1920u;             /* y2,x2 */
-        cs[4]  = fBridgeBuf->ggttOffset;            /* dst */
-        cs[5]  = 0;
-        cs[6]  = 0;                                 /* src x1,y1 */
-        cs[7]  = 7680u;                             /* src pitch */
-        cs[8]  = 0x0u;                              /* src = stolen fb p0 */
-        cs[9]  = 0;
-        cs[10] = MI_FLUSH_DW;                       /* 0x13000001 */
-        cs[11] = MI_BATCH_BUFFER_END;               /* 0x05000000 */
+        uint32_t idx = 0;
+
+        /* BLIT_CCTL register offset from BCS engine base (0x22000 + 0x204 = 0x22204) */
+        const uint32_t blitCctlReg = BCS0_BASE_REAL + 0x204;
+        const uint32_t mocsIndex = 2;  /* WB L3+LLC (matches kMocsWb in VCS command) */
+
+        /* MI_LOAD_REGISTER_IMM(1) - 3 dwords */
+        cs[idx++] = MI_LOAD_REGISTER_IMM(1);           /* 0x11000001 */
+        cs[idx++] = blitCctlReg;                       /* BLIT_CCTL absolute MMIO address */
+        cs[idx++] = (mocsIndex << 1) | (mocsIndex << 9);  /* SRC_MOCS[6:0] | DST_MOCS[14:8] */
+
+        /* GEN9_XY_FAST_COPY_BLT_10DW - 10 dwords (linear 32bpp, 1920x1080) */
+        const uint32_t pitchBytes = 1920 * 4;  /* 7680 bytes */
+        cs[idx++] = GEN9_XY_FAST_COPY_BLT_10DW;        /* 0x50800008 */
+        cs[idx++] = BLT_DEPTH_32 | pitchBytes;         /* dst pitch in bytes */
+        cs[idx++] = 0;                                 /* dst x1,y1 */
+        cs[idx++] = (1080u << 16) | 1920u;             /* dst y2,x2 */
+        cs[idx++] = fBridgeBuf->ggttOffset;            /* dst GGTT offset (lower 32) */
+        cs[idx++] = 0;                                 /* dst instance (upper 32 = 0) */
+        cs[idx++] = 0;                                 /* src x1,y1 */
+        cs[idx++] = pitchBytes;                        /* src pitch in bytes */
+        cs[idx++] = fAccelBatchSrcBuf->ggttOffset;     /* src GGTT offset (lower 32) */
+        cs[idx++] = 0;                                 /* src instance (upper 32 = 0) */
+
+        /* MI_FLUSH_DW + MI_BATCH_BUFFER_END */
+        cs[idx++] = MI_FLUSH_DW;                       /* 0x13000001 */
+        cs[idx++] = MI_BATCH_BUFFER_END;               /* 0x05000000 */
+
         clflushRange(fAccelBatchBuf->cpuAddr, 0x1000u);
+        IOLog("MyIntelGPU: [batchblit] batch built: %u dwords (BLIT_CCTL + XY_FAST_COPY_BLT + FLUSH + BBE)\n", idx);
     }
 
     const uint64_t *bPhys = _gemGetPagesPhys(this, fAccelBatchBuf);
     if (bPhys)
         lrcMapBatchPages(fRingBCS, fAccelBatchBuf->ggttOffset, bPhys,
                          fAccelBatchBuf->size / 4096);
+
+    /* Also map source and destination buffers into PPGTT for the batch */
+    const uint64_t *srcPhys = _gemGetPagesPhys(this, fAccelBatchSrcBuf);
+    if (srcPhys)
+        lrcMapBatchPages(fRingBCS, fAccelBatchSrcBuf->ggttOffset, srcPhys,
+                         fAccelBatchSrcBuf->size / 4096);
+
+    const uint64_t *dstPhys = _gemGetPagesPhys(this, fBridgeBuf);
+    if (dstPhys)
+        lrcMapBatchPages(fRingBCS, fBridgeBuf->ggttOffset, dstPhys,
+                         fBridgeBuf->size / 4096);
 
     /* Reset BEFORE submit: engines that were never sanitized stay gated.
      * Fresh BCS + legacy-off reprogram each probe call. */
@@ -2794,60 +2781,18 @@ void MyIntelGPU::sVblankTimerFired(OSObject *owner, IOTimerEventSource *sender)
     }
 }
 
-  void MyIntelGPU::sampleEngineBusy(void)
-  {
-      fBusySamples++;
-
-      /* Ring MMIO reads while the GT is in RC6 can hang the CPU, so confirm
-       * the GT is awake first. RC_STATE reads 0 in RC6 on i915/Gen12. */
-      if (readReg32(RC_STATE) == 0) {
-          fBusyRc6Skips++;
-          return;
-      }
-
-      static const uint32_t engineBases[] = {
-          RCS0_BASE_REAL, BCS0_BASE_REAL, VCS0_BASE_REAL
-      };
-      const uint32_t nEngines = (uint32_t)(sizeof(engineBases) / sizeof(engineBases[0]));
-      for (uint32_t i = 0; i < nEngines; i++) {
-          const uint32_t base  = engineBases[i];
-          const uint32_t elst  = readReg32(base + RING_EXECLIST_STATUS_LO_OFFSET);
-          const uint32_t head  = readReg32(base + RING_HEAD_REG_OFFSET);
-          const uint32_t tail  = readReg32(base + RING_TAIL_REG_OFFSET);
-          fBusyEngines++;
-          if ((elst & EXECLIST_STATUS_ELEMENT_ACTIVE) || (head != tail))
-              fBusyActive++;
-      }
-  }
-
-  uint32_t MyIntelGPU::getEngineBusyPercent(void) const
-  {
-      if (fBusyEngines == 0)
-          return 0;
-      return (uint32_t)((fBusyActive * 100ULL) / fBusyEngines);
-  }
-
-  void MyIntelGPU::vblankTimerFired(IOTimerEventSource *sender)
-  {
-      if (fStopping) { sender->cancelTimeout(); return; }
-      notifyVblank();
-      fVblankTick++;
-      if (fBusySampling) {
-          sampleEngineBusy();
-          if ((fVblankTick % 300) == 1) {
-              setProperty("MyIntelEngineBusyPercent", (uint64_t)getEngineBusyPercent(), 32);
-              setProperty("MyIntelEngineBusySamples",  fBusySamples,  64);
-              setProperty("MyIntelEngineBusyRc6Skips", (uint64_t)fBusyRc6Skips, 32);
-          }
-      }
-      if ((fVblankTick % 300) == 1) {   /* ~every 5s — evidence without 60Hz log flood */
-          IOLog("MyIntelGPU: [vblank] synthetic tick=%u frame=%llu\n",
-                fVblankTick,
-                fDisplayFramebuffer ? fDisplayFramebuffer->getFrameCounter() : 0);
-      }
-      sender->setTimeoutMS(16);
-  }
-
+void MyIntelGPU::vblankTimerFired(IOTimerEventSource *sender)
+{
+    if (fStopping) { sender->cancelTimeout(); return; }
+    notifyVblank();
+    fVblankTick++;
+    if ((fVblankTick % 300) == 1) {   /* ~every 5s — evidence without 60Hz log flood */
+        IOLog("MyIntelGPU: [vblank] synthetic tick=%u frame=%llu\n",
+              fVblankTick,
+              fDisplayFramebuffer ? fDisplayFramebuffer->getFrameCounter() : 0);
+    }
+    sender->setTimeoutMS(16);
+}
 
 void MyIntelGPU::armVblankTicker(void)
 {
@@ -3479,8 +3424,11 @@ skip_vcs:
     }
 
     fAccelInitialized = true;
-    IODebug("=== HW Accel Init %s ===",
-            (fRingRCS || fRingBCS || fRingVCS) ? "OK (partial OK)" : "FAILED");
+    IODebug("=== HW Accel Init %s (RCS=%s BCS=%s VCS=%s) ===",
+            (fRingRCS && fRingBCS && fRingVCS) ? "OK" : "OK (partial)",
+            fRingRCS ? "yes" : "no",
+            fRingBCS ? "yes" : "no",
+            fRingVCS ? "yes" : "no");
     return (fRingRCS != NULL || fRingBCS != NULL || fRingVCS != NULL);
 
     /*
@@ -4145,26 +4093,6 @@ bool MyIntelGPU::start(IOService *provider)
      */
     detectHardwareGeneration();
 
-    /*
-     *  Native Gen10/12 pipeline — opt-in boot-arg mynative=1.
-     *  Must run BEFORE buildTranslationTable() so fFakeGen=0 short-circuits
-     *  it ("native mode — no table") and every later MMIO access is
-     *  identity-mapped. Default OFF: no boot-arg → legacy fake-gen path
-     *  byte-for-byte identical to the shipped 3.1.35 behavior.
-     */
-    {
-        uint32_t nativeArg = 0;
-        if (PE_parse_boot_argn("mynative", &nativeArg, sizeof(nativeArg)) &&
-            nativeArg != 0) {
-            if (initializeGen10Hardware(NULL)) {
-                IOLog("MyIntelGPU: native Gen10/12 path engaged (mynative=1)\n");
-            } else {
-                IOLog("MyIntelGPU: native Gen10/12 path not engaged — FakeGen=%u translation stays ON\n",
-                      fFakeGen);
-            }
-        }
-    }
-
     IODebug("Phase 3: Hardware detected — Gen=%u, FakeGen=%u%s",
             fGraphicsVer, fFakeGen,
             fUseGmdId ? " (GMD_ID)" : "");
@@ -4323,21 +4251,6 @@ bool MyIntelGPU::start(IOService *provider)
             gEnableDisplayFramebuffer = (fbArg != 0);
         }
     }
-
-    /* Engine-busy telemetry: opt-in, default off (see MyIntelGPU.hpp). */
-    fBusySampling = false;
-    fBusySamples  = 0;
-    fBusyActive   = 0;
-    fBusyEngines  = 0;
-    fBusyRc6Skips = 0;
-    {
-        uint32_t busyArg = 0;
-        if (PE_parse_boot_argn("myintelbusy", &busyArg, sizeof(busyArg)))
-            fBusySampling = (busyArg != 0);
-    }
-    if (fBusySampling)
-        IOLog("MyIntelGPU: engine-busy telemetry ON (myintelbusy=1)\n");
-
     if (gEnableDisplayFramebuffer && fFakeGen != 0) {
         mygpuProgress("start:P5b-display");
         initDisplay();
@@ -4505,16 +4418,6 @@ bool MyIntelGPU::start(IOService *provider)
      */
     initHardwareAcceleration();
 
-    /* Native Gen10/12 pipeline conclusion — Code.cpp order:
-     * initializeGen10Hardware (dispatch, above) → configureGGTTForGen10 →
-     * setupExecutionRingsGen10. Both wrappers are idempotent: at this
-     * point GGTT (Phase 6) and accel (above) already ran, so they only
-     * verify the real Gen12 bases + log. */
-    if (fNativeGen10) {
-        configureGGTTForGen10();
-        setupExecutionRingsGen10();
-    }
-
     if (fAccelInitialized) {
         IODebug("Phase 6b: HW Acceleration OK (RCS=%s BCS=%s VCS=%s)",
                 fRingRCS ? "yes" : "no",
@@ -4522,17 +4425,17 @@ bool MyIntelGPU::start(IOService *provider)
                 fRingVCS ? "yes" : "no");
 
         if (fRingVCS) {
-            IOService *vcsNub = new IOService;
+            MyIntelVCSNub *vcsNub = new MyIntelVCSNub;
             if (vcsNub && vcsNub->init()) {
                 vcsNub->attach(this);
-                vcsNub->setName("MyIntelVCS");
-                vcsNub->setProperty("IOUserClientClass", "MyIntelVCSClient");
+                vcsNub->setName(DEC_BUFFER_VCS);
+                vcsNub->setProperty(DEC_BUFFER_IOUserClient, DEC_BUFFER_VCSClient);
                 vcsNub->setProperty("IOProviderClass", "IOService");
                 vcsNub->registerService();
                 vcsNub->release();
-                IODebug("Phase 6b: %s nub published — user-space can open VCS", "MyIntelVCS");
+                IODebug("Phase 6b: %s nub published — user-space can open VCS", DEC_BUFFER_VCS);
             } else {
-                IODebug("Phase 6b: %s nub alloc/init failed", "MyIntelVCS");
+                IODebug("Phase 6b: %s nub alloc/init failed", DEC_BUFFER_VCS);
                 if (vcsNub) vcsNub->release();
             }
         }
@@ -4623,15 +4526,7 @@ bool MyIntelGPU::start(IOService *provider)
 
     startPhase7Media();
 
-    setProperty("IOUserClientClass", "MyIntelGPUClient");
-
-    /* Phase 5d built the framebuffer; publishing it here is what makes the
-     * OS display path find it. Deleting this line fails silently. */
-    if (fDisplayFramebuffer) {
-        setProperty("IOFramebuffer", fDisplayFramebuffer);
-        IODebug("Connected MyIntelFramebuffer to GPU via IOFramebuffer property");
-    }
-
+    setProperty(DEC_BUFFER_IOUserClient, DEC_BUFFER_GPUClient);
     registerService();
 
     /*
@@ -4945,6 +4840,14 @@ void MyIntelGPU::stop(IOService *provider)
         gemBufferDestroy(fBridgeBuf, (uint32_t *)fGsm, &MyIntelGPU::ggttInvalidateTrampoline, this);
         fBridgeBuf = NULL;
     }
+    if (fAccelBatchSrcBuf) {
+        gemBufferDestroy(fAccelBatchSrcBuf, (uint32_t *)fGsm, &MyIntelGPU::ggttInvalidateTrampoline, this);
+        fAccelBatchSrcBuf = NULL;
+    }
+    if (fAccelBatchBuf) {
+        gemBufferDestroy(fAccelBatchBuf, (uint32_t *)fGsm, &MyIntelGPU::ggttInvalidateTrampoline, this);
+        fAccelBatchBuf = NULL;
+    }
 
     /*
  * MyIntelFramebuffer (IOFramebuffer Binding)
@@ -5132,7 +5035,8 @@ IOWorkLoop *MyIntelGPU::getWorkLoop(void)
 void MyIntelGPU::armEngineInterrupts(void)
 {
     bool gEnableGtInterrupts = false;
-    PE_parse_boot_argn("myintelgtirq", &gEnableGtInterrupts, sizeof(gEnableGtInterrupts));
+    char gtirqArg[8] = {};
+    gEnableGtInterrupts = (PE_parse_boot_argn("myintelgtirq", gtirqArg, sizeof(gtirqArg)) && gtirqArg[0] != '0');
 
     /* 2.0.227: stop() gate — never arm during teardown (review CRITICAL:
      * stop() vs deferred arming race; setProperties can fire from a user
@@ -5182,9 +5086,26 @@ void MyIntelGPU::armEngineInterrupts(void)
     }
     fInterruptEventSource->enable();
 
-    /* gen11_gt_irq_postinstall() — masked regs first, master latch last */
+    /* gen11_gt_irq_reset() — clear/disable bank 0 + 1 before arming so no
+     * stale pending GT interrupt can fire the instant the master latch
+     * goes live (mirrors i915 gen11_gt_irq_reset(): enable=0, mask=~0). */
+    writeReg32(GEN11_RCS0_RSVD_INTR_MASK, ~0u);
+    writeReg32(GEN11_BCS_RSVD_INTR_MASK, ~0u);
+    writeReg32(GEN11_VCS0_VCS1_INTR_MASK, ~0u);
+    writeReg32(GEN11_VCS2_VCS3_INTR_MASK, ~0u);   /* VDBOX2/3 (Gen12) */
+    writeReg32(GEN11_VECS0_VECS1_INTR_MASK, ~0u); /* VEBOX0/1 (Gen12) */
+    writeReg32(GEN11_RENDER_COPY_INTR_ENABLE, 0);
+    writeReg32(GEN11_VCS_VECS_INTR_ENABLE, 0);
+    readReg32(GEN11_VCS_VECS_INTR_ENABLE); /* posting read */
+
+    /* gen11_gt_irq_postinstall() — masked regs first, master latch last.
+     * VCS/VECS use ~dmask (i915 gen11 line 313-314); RCS/BCS use ~smask. */
     writeReg32(GEN11_RCS0_RSVD_INTR_MASK, ~GEN11_GT_SMASK);
     writeReg32(GEN11_BCS_RSVD_INTR_MASK, ~GEN11_GT_SMASK);
+    writeReg32(GEN11_VCS0_VCS1_INTR_MASK, ~GEN11_GT_DMASK);
+    writeReg32(GEN11_VCS2_VCS3_INTR_MASK, ~GEN11_GT_DMASK);
+    writeReg32(GEN11_VECS0_VECS1_INTR_MASK, ~GEN11_GT_DMASK);
+    writeReg32(GEN11_VCS_VECS_INTR_ENABLE, GEN11_GT_DMASK);
     writeReg32(GEN11_RENDER_COPY_INTR_ENABLE, GEN11_GT_DMASK);
     writeReg32(GEN11_GFX_MSTR_IRQ, GEN11_MASTER_IRQ);
     readReg32(GEN11_GFX_MSTR_IRQ); /* posting read */
@@ -5486,15 +5407,20 @@ void MyIntelGPU::kickRingLocked(MyIntelRing *ring)
     IODebug("kickCommandSet2: pre head=%u tail=%u space=%u (appending set 2)",
             ring->head, ring->tail, ring->space);
 
-    /* Storm guard: the emits below append to the ring. If the ring is full
-     * (space drained to 0, head not advancing) they cannot be emitted —
-     * bailing here breaks the USER_INTERRUPT -> IRQ -> kick loop that
-     * otherwise spins forever at tail=16320 with the CPU pegged (dmesg:
-     * "flush emit failed" every ~1.2ms). */
-    if (ring->space < kKickReserveBytes) {
-        IODebug("kickCommandSet2: insufficient space — SKIP submit "
+    if (!ringEmitFlushDW(ring, true, true)) {
+        /* Storm guard: never re-submit a stuck tail. If the ring is full
+         * (space drained to 0, head not advancing) the flush cannot be
+         * emitted — bailing here breaks the USER_INTERRUPT -> IRQ -> kick
+         * loop that otherwise spins forever at tail=16320 with the CPU
+         * pegged (dmesg: "flush emit failed" every ~1.2ms). */
+        IODebug("kickCommandSet2: flush emit failed — SKIP submit "
                 "(head=%u tail=%u space=%u)",
                 ring->head, ring->tail, ring->space);
+        return;
+    }
+    if (!ringEmitNOOP(ring)) {
+        IODebug("kickCommandSet2: NOOP emit failed — SKIP submit (space=%u)",
+                ring->space);
         return;
     }
     /* Drain the pending batch queue in FIFO order: one BB_START per entry,
@@ -5502,14 +5428,8 @@ void MyIntelGPU::kickRingLocked(MyIntelRing *ring)
      * batch has run and returned (MI_BATCH_BUFFER_END → ring at
      * USER_INT) — completion signal, i915 breadcrumb-after-bb_start parity.
      * Each queued batch is a separate BB_START; the ring executes them
-     * sequentially (batch N's END returns to ring at BB_START N+1).
-     *
-     * The fence store (MI_FLUSH_DW + STORE_INDEX) is emitted AFTER this
-     * loop, so the GPU writes the seqno only once every batch has retired —
-     * i915 gen6_emit_breadcrumb_xcs() ordering. Emitting it first would
-     * publish completion before the work ran. */
+     * sequentially (batch N's END returns to ring at BB_START N+1). */
     uint32_t queueIdx = ring->pendingHead;
-    uint32_t lastSeqno = 0;
     while (ring->pendingCount > 0) {
         MyIntelRing::PendingBatch *pb = &ring->pendingQueue[queueIdx];
         if (pb->ggtt == 0) {
@@ -5524,23 +5444,13 @@ void MyIntelGPU::kickRingLocked(MyIntelRing *ring)
                     ring->space);
             return;
         }
-        lastSeqno = pb->seqno;
         pb->ggtt = 0;
         pb->taskType = 0;
         pb->packetData = 0;
-        pb->seqno = 0;
         queueIdx = (queueIdx + 1) % RING_PENDING_MAX;
         ring->pendingCount--;
     }
     ring->pendingHead = queueIdx;
-
-    if (!ringEmitFlushDW(ring, true, true, lastSeqno)) {
-        IODebug("kickCommandSet2: flush emit failed — SKIP submit (space=%u)",
-                ring->space);
-        return;
-    }
-    ring->currentSeqno = lastSeqno;
-
     if (!ringEmitUserInterrupt(ring)) {
         IODebug("kickCommandSet2: USER_INTERRUPT emit failed — SKIP submit (space=%u)",
                 ring->space);
@@ -5644,7 +5554,7 @@ static MyIntelGEMBuffer *allocAndBuildBatchBuffer(MyIntelGPU *self, MyIntelRing 
     case kMyIntelTaskTypeBreadcrumb: {
         uint32_t seqno = (uint32_t)(packetData & 0xFFFFFFFFULL);
         if (seqno == 0) seqno = 0xBEEF0001;
-        uint32_t hwspGtt = ring->hwspGgtt ? ring->hwspGgtt : clientGgttOffset;
+        uint32_t hwspGttClient = ring->hwspGgtt ? ring->hwspGgtt : clientGgttOffset;
         dwCount = emitBreadcrumbSeqno(cmd, hwspGtt, seqno);
         break;
     }
@@ -5679,132 +5589,14 @@ static uint32_t registerInFlightBatch(MyIntelGEMBuffer *buf, uint32_t seqno)
     return 0;
 }
 
-/* Hardware head position. On Gen12 execlists the RING_HEAD MMIO register
- * reads 0 — the live head lives in the LRC image at CTX_RING_HEAD, the same
- * source ringBegin() uses. */
-static uint32_t ringHardwareHead(MyIntelRing *ring)
-{
-    if (!ring) return 0;
-    if (ring->lrcInited && ring->lrcVaddr) {
-        uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
-        return state[CTX_RING_HEAD];
-    }
-    return ring->head;
-}
-
-void MyIntelGPU::readRingStatus(uint64_t *out)
-{
-    if (!out) return;
-    for (int i = 0; i < 6; i++) out[i] = 0;
-
-    IOLock *lock = getEngineLock();
-    if (lock) IOLockLock(lock);
-
-    MyIntelRing *ring = fRingRCS;
-    if (ring && ring->magic == RING_MAGIC && ring->initialized) {
-        out[0] = ringHardwareHead(ring);
-        out[1] = ring->tail;
-        out[2] = ring->space;
-        out[3] = ring->pendingCount;
-        out[4] = ring->size;
-        if (ring->hwspVaddr)
-            out[5] = ((uint32_t *)ring->hwspVaddr)[I915_GEM_HWS_SEQNO_DWORD];
-    }
-
-    if (lock) IOLockUnlock(lock);
-}
-
-void MyIntelGPU::waitBatchCompletion(uint32_t seqno, uint32_t timeoutMs,
-                                     uint64_t *done, uint64_t *completedSeqno,
-                                     uint64_t *pendingCount)
-{
-    if (done) *done = 0;
-    if (completedSeqno) *completedSeqno = 0;
-    if (pendingCount) *pendingCount = 0;
-
-    if (!fRingRCS || !fRingRCS->hwspVaddr) return;
-
-    const uint32_t *hwsp = (const uint32_t *)fRingRCS->hwspVaddr;
-    const uint32_t kSpin = 200;   /* IODelay(200us) per iteration */
-    uint32_t waited = 0;
-    const uint32_t kMaxIters = (timeoutMs == 0) ? 1 : (timeoutMs * 5);
-
-    for (uint32_t i = 0; i < kMaxIters; i++) {
-        uint32_t completed = hwsp[I915_GEM_HWS_SEQNO_DWORD];
-        if (completedSeqno) *completedSeqno = completed;
-        if (pendingCount) {
-            IOLock *lock = getEngineLock();
-            if (lock) {
-                IOLockLock(lock);
-                *pendingCount = fRingRCS->pendingCount;
-                IOLockUnlock(lock);
-            }
-        }
-        /* Seqnos start at 1 and wrap at 2^32; plain >= is correct for the
-         * non-wrapping span a single batch wait can span. */
-        if (seqno == 0 || completed >= seqno) {
-            if (done) *done = 1;
-            return;
-        }
-        if (timeoutMs == 0) return;
-        IODelay(kSpin);
-        waited++;
-    }
-}
-
-uint32_t MyIntelGPU::submitUserBatch(MyIntelGEMBuffer *buf, uint32_t dwords)
-{
-    if (!fAccelInitialized || !fRingCallbacks) return 0;
-
-    MyIntelRing *ring = fRingRCS;
-    if (!ring || !ringIsInitialized(ring)) return 0;
-    if (!buf || buf->magic != GEM_BUFFER_MAGIC) return 0;
-    if (dwords == 0 || dwords > (buf->size / 4)) return 0;
-
-    IOLock *lock = getEngineLock();
-    if (!lock) return 0;
-
-    IOLockLock(lock);
-    if (ring->pendingCount >= RING_PENDING_MAX) {
-        IOLockUnlock(lock);
-        return 0;
-    }
-    if (!lrcMapBatchPages(ring, buf->ggttOffset, buf->pagesPhys, buf->pages)) {
-        IOLockUnlock(lock);
-        IODebug("submitUserBatch: lrcMapBatchPages FAILED (ggtt=0x%X)", buf->ggttOffset);
-        return 0;
-    }
-    IOLockUnlock(lock);
-
-    uint32_t seqno = gNextSeqno++;
-    if (seqno == 0) seqno = 1;
-    registerInFlightBatch(buf, seqno);
-
-    IOLockLock(lock);
-    uint32_t slot = (ring->pendingHead + ring->pendingCount) % RING_PENDING_MAX;
-    ring->pendingQueue[slot].ggtt       = buf->ggttOffset;
-    ring->pendingQueue[slot].taskType   = kMyIntelTaskTypeUserBatch;
-    ring->pendingQueue[slot].packetData = dwords;
-    ring->pendingQueue[slot].seqno      = seqno;
-    ring->pendingCount++;
-    ring->workPending = true;
-    IOLockUnlock(lock);
-
-    kickCommandSet2();
-    if (fKickPending) kickCommandSet2();
-
-    IOLog("MyIntelGPU: [EXEC] user batch ggtt=0x%X dwords=%u seqno=%u\n",
-          buf->ggttOffset, dwords, seqno);
-    return seqno;
-}
-
 void MyIntelGPU::cleanupInFlightBatches(MyIntelRing *ring)
-{    if (!ring || !ring->hwspGgtt) return;
+{
+    if (!ring || !ring->hwspGgtt) return;
 
     uint32_t *hwsp = (uint32_t *)ring->hwspVaddr;
     if (!hwsp) return;
 
-    uint32_t completedSeqno = hwsp[I915_GEM_HWS_SEQNO_DWORD];
+    uint32_t completedSeqno = hwsp[0x40 / 4];
 
     for (uint32_t i = 0; i < kMaxInFlightBatches; i++) {
         if (gInFlightBatches[i].inUse && gInFlightBatches[i].seqno <= completedSeqno) {
@@ -5875,7 +5667,6 @@ kern_return_t MyIntelGPU::submitClientTaskViaRing(uint32_t taskType,
     ring->pendingQueue[slot].ggtt       = buf->ggttOffset;
     ring->pendingQueue[slot].taskType   = taskType;
     ring->pendingQueue[slot].packetData = packetData;
-    ring->pendingQueue[slot].seqno      = seqno;
     ring->pendingCount++;
     ring->workPending = true;
     IOLockUnlock(lock);
@@ -5984,6 +5775,124 @@ kern_return_t MyIntelGPU::submitClientTaskViaRing(void *batchBuffer,
     IODebug("submitClientTaskViaRing(legacy): queued taskType=%u seqno=%u cmdGgtt=0x%X clientGgtt=0x%X",
             taskType, seqno, cmdBuf->ggttOffset, clientBuf->ggttOffset);
     return kIOReturnSuccess;
+}
+
+/* Hardware head position. On Gen12 execlists the RING_HEAD MMIO register
+ * reads 0 — the live head lives in the LRC image at CTX_RING_HEAD, the same
+ * source ringBegin() uses. */
+static uint32_t ringHardwareHead(MyIntelRing *ring)
+{
+    if (!ring) return 0;
+    if (ring->lrcInited && ring->lrcVaddr) {
+        uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
+        return state[CTX_RING_HEAD];
+    }
+    return ring->head;
+}
+
+void MyIntelGPU::readRingStatus(uint64_t *out)
+{
+    if (!out) return;
+    for (int i = 0; i < 6; i++) out[i] = 0;
+
+    IOLock *lock = getEngineLock();
+    if (lock) IOLockLock(lock);
+
+    MyIntelRing *ring = fRingRCS;
+    if (ring && ring->magic == RING_MAGIC && ring->initialized) {
+        out[0] = ringHardwareHead(ring);
+        out[1] = ring->tail;
+        out[2] = ring->space;
+        out[3] = ring->pendingCount;
+        out[4] = ring->size;
+        if (ring->hwspVaddr)
+            out[5] = ((uint32_t *)ring->hwspVaddr)[HWS_SEQNO_DWORD];
+    }
+
+    if (lock) IOLockUnlock(lock);
+}
+
+void MyIntelGPU::waitBatchCompletion(uint32_t seqno, uint32_t timeoutMs,
+                                     uint64_t *done, uint64_t *completedSeqno,
+                                     uint64_t *pendingCount)
+{
+    if (done) *done = 0;
+    if (completedSeqno) *completedSeqno = 0;
+    if (pendingCount) *pendingCount = 0;
+
+    if (!fRingRCS || !fRingRCS->hwspVaddr) return;
+
+    const uint32_t *hwsp = (const uint32_t *)fRingRCS->hwspVaddr;
+    const uint32_t kSpin = 200;   /* IODelay(200us) per iteration */
+    uint32_t waited = 0;
+    const uint32_t kMaxIters = (timeoutMs == 0) ? 1 : (timeoutMs * 5);
+
+    for (uint32_t i = 0; i < kMaxIters; i++) {
+        uint32_t completed = hwsp[HWS_SEQNO_DWORD];
+        if (completedSeqno) *completedSeqno = completed;
+        if (pendingCount) {
+            IOLock *lock = getEngineLock();
+            if (lock) {
+                IOLockLock(lock);
+                *pendingCount = fRingRCS->pendingCount;
+                IOLockUnlock(lock);
+            }
+        }
+        /* Seqnos start at 1 and wrap at 2^32; plain >= is correct for the
+         * non-wrapping span a single batch wait can span. */
+        if (seqno == 0 || completed >= seqno) {
+            if (done) *done = 1;
+            return;
+        }
+        if (timeoutMs == 0) return;
+        IODelay(kSpin);
+        waited++;
+    }
+}
+
+uint32_t MyIntelGPU::submitUserBatch(MyIntelGEMBuffer *buf, uint32_t dwords)
+{
+    if (!fAccelInitialized || !fRingCallbacks) return 0;
+
+    MyIntelRing *ring = fRingRCS;
+    if (!ring || !ringIsInitialized(ring)) return 0;
+    if (!buf || buf->magic != GEM_BUFFER_MAGIC) return 0;
+    if (dwords == 0 || dwords > (buf->size / 4)) return 0;
+
+    IOLock *lock = getEngineLock();
+    if (!lock) return 0;
+
+    IOLockLock(lock);
+    if (ring->pendingCount >= RING_PENDING_MAX) {
+        IOLockUnlock(lock);
+        return 0;
+    }
+    if (!lrcMapBatchPages(ring, buf->ggttOffset, buf->pagesPhys, buf->pages)) {
+        IOLockUnlock(lock);
+        IODebug("submitUserBatch: lrcMapBatchPages FAILED (ggtt=0x%X)", buf->ggttOffset);
+        return 0;
+    }
+    IOLockUnlock(lock);
+
+    uint32_t seqno = gNextSeqno++;
+    if (seqno == 0) seqno = 1;
+    registerInFlightBatch(buf, seqno);
+
+    IOLockLock(lock);
+    uint32_t slot = (ring->pendingHead + ring->pendingCount) % RING_PENDING_MAX;
+    ring->pendingQueue[slot].ggtt       = buf->ggttOffset;
+    ring->pendingQueue[slot].taskType   = kMyIntelTaskTypeUserBatch;
+    ring->pendingQueue[slot].packetData = dwords;
+    ring->pendingCount++;
+    ring->workPending = true;
+    IOLockUnlock(lock);
+
+    kickCommandSet2();
+    if (fKickPending) kickCommandSet2();
+
+    IOLog("MyIntelGPU: [EXEC] user batch ggtt=0x%X dwords=%u seqno=%u\n",
+          buf->ggttOffset, dwords, seqno);
+    return seqno;
 }
 
 #pragma mark -

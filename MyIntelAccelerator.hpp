@@ -17,7 +17,7 @@
 #ifndef __MY_INTEL_ACCELERATOR_HPP__
 #define __MY_INTEL_ACCELERATOR_HPP__
 
-#include <IOKit/IOService.h>
+#include <IOKit/graphics/IOAccelerator.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/graphics/IOAccelerator.h>
 #include <IOKit/graphics/IOAccelSurfaceConnect.h>

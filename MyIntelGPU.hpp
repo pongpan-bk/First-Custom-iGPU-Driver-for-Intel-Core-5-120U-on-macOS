@@ -260,11 +260,40 @@ enum {
 #endif
 
 #define GEN11_GT_INTR_DW0   0x44074    /* GT Interrupt DW0 (shared) */
-#define ENGINE_TAIL_REG      0x80      /* Ring Tail Register offset
- ( engine base) */
-#define ENGINE_HEAD_REG      0x34      /* Ring Head Register offset */
-#define ENGINE_CTL_REG       0x3C      /* Ring Control Register offset */
-#define ENGINE_START_REG     0x38      /* Ring Start (Base Address) */
+#define GEN11_RENDER_COPY_INTR_ENABLE 0x190030
+#define GEN11_VCS_VECS_INTR_ENABLE     0x190034
+#define GEN11_RCS0_RSVD_INTR_MASK      0x190090
+#define GEN11_BCS_RSVD_INTR_MASK       0x1900A0
+#define GEN11_VCS0_VCS1_INTR_MASK      0x1900A8
+#define GEN11_VCS2_VCS3_INTR_MASK      0x1900AC
+#define GEN11_VECS0_VECS1_INTR_MASK    0x1900D0
+#define GEN11_GFX_MSTR_IRQ            0x190010
+
+/* Gen11+ SQR / Execlist Submission */
+#define RING_EXECLIST_SQ_CONTENTS_OFF  0x510
+#define RING_EXECLIST_CONTROL_OFF      0x550
+#define EL_CTRL_LOAD                   (1U << 0)
+
+/* Forcewake (Gen12/RPL) */
+#define FORCEWAKE_RENDER_GEN9           0xA278
+#define FORCEWAKE_MEDIA_GEN9            0xA270
+#define FORCEWAKE_ACK_RENDER_GEN9       0xD84
+#define FORCEWAKE_ACK_MEDIA_GEN9       0xD88
+#define FORCEWAKE_MT                    0xA188
+#define FORCEWAKE                     0xA18C
+#define FORCEWAKE_KERNEL               (1U << 0)
+#define FORCEWAKE_KERNEL_FALLBACK       (1U << 1)
+
+/* Power Well (Gen9+) */
+#define GEN9_PG_ENABLE                   0xA210
+#define GEN9_RENDER_PG_ENABLE            (1U << 0)
+#define GEN9_MEDIA_PG_ENABLE             (1U << 1)
+#define GEN9_PWRGT_DOMAIN_STATUS         0xA2A0
+
+/* RING_CTL additional bits */
+#define RING_WAIT                        (1U << 11)
+#define RING_WAIT_SEMAPHORE              (1U << 10)
+#define RING_NR_PAGES_MASK               0x001FF000
 
 #define GFX_FLSH_CNTL_GEN6  0x101008  /* GGTT TLB Invalidate Register
                                            VERIFIED i915 gt/intel_gt_regs.h:1475
@@ -903,7 +932,7 @@ public:
     kern_return_t submitClientTaskViaRing(void *batchBuffer, uint32_t taskType, uint64_t packetData);
 
     /*!
-     * @brief Submit a userspace-written command stream (i915 execbuffer contract)
+ * @brief Submit a userspace-written command stream (i915 execbuffer contract)
      * @param buf      GEM buffer already filled by the caller with commands
      * @param dwords   Command length in dwords
      * @return seqno to wait on (0 on failure)
@@ -915,7 +944,7 @@ public:
     uint32_t submitUserBatch(MyIntelGEMBuffer *buf, uint32_t dwords);
 
     /*!
-     * @brief Block until the GPU-written HWSP seqno reaches @p seqno
+ * @brief Block until the GPU-written HWSP seqno reaches @p seqno
      * @param timeoutMs 0 polls once without sleeping
      */
     void waitBatchCompletion(uint32_t seqno, uint32_t timeoutMs,
@@ -923,7 +952,7 @@ public:
                              uint64_t *pendingCount);
 
     /*!
-     * @brief Fill @p out[0..5] with head, tail, space, pending, ringSize, completed
+ * @brief Fill @p out[0..5] with head, tail, space, pending, ringSize, completed
      *
      * Duty cycle is derived by the caller from head deltas over wall clock;
      * GPUActivityInPercent is a static property and is not evidence.
@@ -1032,13 +1061,6 @@ public:
     uint64_t getApertureSize(void) const { return fApertureSize; }
     uint32_t getGttTotal(void) const { return fGttTotal; }
 
-    /* Native Gen10/12 pipeline (mynative=1 boot-arg) — cuts FakeID
-     * translation (fFakeGen=0 → identity) so MMIO/GGTT/rings run on the
-     * real Gen12 bases via the existing *_REAL init paths. */
-    bool initializeGen10Hardware(OSDictionary *dict);
-    bool configureGGTTForGen10(void);
-    bool setupExecutionRingsGen10(void);
-
 private:
 
     /*! @brief kickCommandSet2 body — MUST be called with fEngineLock held.
@@ -1068,11 +1090,8 @@ private:
     /* Hardware Info */
  uint32_t fDeviceID; /*!< PCI Device ID () */
     uint32_t                 fRevision;        /*!< PCI Revision ID */
-uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VER)
-                                                 = 12 ADL, 9 CFL */
-    uint32_t                 fHardwareGeneration; /*!< 10 = native Gen10/12 pipeline
-                                                 (FakeID translation CUT); 9 = legacy fake-gen */
-    bool                     fNativeGen10;      /*!< true = mynative=1 selected native path */
+    uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VER)
+ = 12 ADL, 9 CFL */
     uint8_t                  fFakeGen;         /*!< Fake Generation ID:
  9 = Coffee Lake
  12 = Alder Lake
@@ -1154,6 +1173,7 @@ uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VE
     bool                     accelPadProps(void);   /*!< Door-A: eGPU-trick property injection */
     /* Hypothesis #10: BCS blit as BATCH+BB_START (proven VDBOX/gem_test pattern) */
     MyIntelGEMBuffer        *fAccelBatchBuf;       /*!< blit batch buffer (lazy alloc) */
+    MyIntelGEMBuffer        *fAccelBatchSrcBuf;    /*!< blit source buffer with test pattern (lazy alloc) */
     bool                     accelBatchBlit(void);
     bool                     accelBCSReset(void);  /*!< Hyp#11: GDRST BCS + full reprogram */
     uint32_t                 fAliveTick;          /*!< alive-ticker count (5s per tick) */
@@ -1165,16 +1185,6 @@ uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VE
     uint64_t                 fIrqDisplay;         /*!< GEN11_DISPLAY_IRQ seen */
     uint32_t                 fStormTick;          /*!< ALIVE tick of storm window */
     uint32_t                 fStormCount;         /*!< IRQs in current tick window */
-
-    /* Engine-busy telemetry, boot-arg "myintelbusy=1", default OFF.
-     * Kept OFF by default: engine MMIO reads from a timer are only safe while
-     * the GT is awake, so the default path adds no MMIO reads at all. */
-    bool                     fBusySampling;       /*!< myintelbusy=1 latched at init */
-    uint64_t                 fBusySamples;        /*!< timer samples taken */
-    uint64_t                 fBusyActive;         /*!< summed active engines */
-    uint64_t                 fBusyEngines;        /*!< engine-observations */
-    uint32_t                 fBusyRc6Skips;       /*!< samples skipped: GT asleep */
-    void                     sampleEngineBusy(void);
 
     /* Translation Table */
  RegisterTranslationEntry fTransTable[10]; /*!< register offset */
@@ -1274,13 +1284,6 @@ uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VE
 
     /* Phase 4.4 — VRAM pool accessor (set during ggttInitHardware) */
     uint64_t getVramPoolSize(void) const { return fVramPoolSize; }
-
-    /* Engine-busy telemetry readers. Deliberately NOT part of
-     * PerformanceStatistics: those keys must stay stable to satisfy AGPM's
-     * poll contract, so the live measurement lives under its own name. */
-    bool     busySamplingEnabled(void) const { return fBusySampling; }
-    uint32_t getEngineBusyPercent(void) const;
-    uint32_t getEngineBusyRc6Skips(void) const { return fBusyRc6Skips; }
 
     /* GGTT total pages accessor (for accelerator diagnostics) */
 

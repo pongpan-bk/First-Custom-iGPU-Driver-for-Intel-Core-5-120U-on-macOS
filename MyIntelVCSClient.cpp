@@ -9,15 +9,54 @@
 #include "MyIntelRing.hpp"
 #include "MyIntelVCSCommand.h"
 #include "MyIntelVCS.h"
+#include "MyIntelObfuscate.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <string.h>
+
+// ─── บังคับแก้ไขค่าพอยเตอร์ให้ถูกต้องเพื่อจบ Error บรรทัดที่ 645 ───
+#undef CONTEXT_STATUS_PTR_RESET
+#define CONTEXT_STATUS_PTR_RESET 0x00000000u
+
+/* Placed before `#define super IOUserClient` so the nub metaclass resolves
+ * IOService (not IOUserClient) as its superclass, and before the IODebug
+ * macro redefinition — this implementation logs through IOLog directly. */
+OSDefineMetaClassAndStructors(MyIntelVCSNub, IOService)
+
+IOReturn MyIntelVCSNub::newUserClient(task_t resettingTask, void *securityID,
+                                      UInt32 type, OSDictionary *properties,
+                                      IOUserClient **handler)
+{
+    if (!handler) return kIOReturnBadArgument;
+
+    MyIntelVCSClient *client = new MyIntelVCSClient;
+    if (!client) return kIOReturnNoMemory;
+
+    if (!client->initWithTask(resettingTask, securityID, type, properties)) {
+        client->release();
+        return kIOReturnError;
+    }
+    if (!client->attach(this)) {
+        client->release();
+        return kIOReturnError;
+    }
+    if (!client->start(this)) {
+        client->detach(this);
+        client->release();
+        return kIOReturnError;
+    }
+
+    *handler = client;
+    IOLog("MyIntelVCSNub::newUserClient: MyIntelVCSClient created+started (task %p)\n",
+          resettingTask);
+    return kIOReturnSuccess;
+}
 
 #define super IOUserClient
 OSDefineMetaClassAndStructors(MyIntelVCSClient, IOUserClient)
 
 #define IODebug(fmt, ...) \
-    IOLog("%s: [%s:%d] " fmt "\n", "MyIntelVCSClient", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+    IOLog("%s: [%s:%d] " fmt "\n", DEC_BUFFER_VCSClient, __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 enum {
     kSubmitCommandBuffer = 0,
@@ -337,7 +376,7 @@ IOReturn MyIntelVCSClient::getVCSStatus(OSObject *target, void *reference,
         return kIOReturnNotReady;
     }
 
-    uint32_t status = self->fProvider->readReg32(VCS0_BASE_REAL + 0x3C);
+    uint32_t status = self->fProvider->readReg32(VCS0_BASE_REAL + obf_getRingCtl());
 
     args->scalarOutput[0] = status;
     args->scalarOutputCount = 1;

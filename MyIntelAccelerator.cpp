@@ -9,9 +9,10 @@
 
 #include "MyIntelAccelerator.hpp"
 #include "MyIntelGPU.hpp"
+#include "MyIntelObfuscate.h"
 #include "MyIntelRing.hpp"
 #include <IOKit/IOLib.h>
-#include <libkern/c++/OSArray.h>
+#include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include <string.h>
@@ -26,6 +27,14 @@
 
 #define super IOAccelerator
 OSDefineMetaClassAndStructors(MyIntelAccelerator, IOAccelerator)
+
+/* ── Path B: Metal device/shared client bound (2026-09-18, v3.1.30) ──────────
+ * type 5/6 = Metal IOAccel device/shared contract probed by WindowServer/Metal.
+ * Module-static counter bounds concurrent type-5/6 clients so a WindowServer
+ * crash + reopen flood cannot cascade "Too many corpses being created"
+ * (root cause of the 2026-09-17 crash-loop — see newUserClient rationale). */
+static SInt32 gMetalClientCount = 0;
+static const SInt32 kMaxConcurrentMetalClients = 2;
 
 #pragma mark - MyIntelAccelerator
 
@@ -143,10 +152,65 @@ IOReturn MyIntelAccelerator::newUserClient(task_t resettingTask, void *securityI
         return kIOReturnSuccess;
     }
 
-    /* 🚨 ท่อพักสายชั่วคราว (Pass-through Test): ถ้า WindowServer ยิง Type อื่น (เช่น 0, 1, 2) มาขอเปิดคลาส 
-     * เราจะแกล้งทำเป็นยอมรับ เพื่อหลอกไม่ให้ WindowServer ปฏิเสธการทำงานและสั่งเด้งกลับไปใช้ CPU 
-     * รอดูหน้างานสดๆ เลยว่าอาการหน่วงแล็กส้นตีนตอนย่อแอปจะหายไปหรือไม่ */
-    if (type >= 0 && type <= 0x30) {
+    /* 2026-09-18 PATH B (v3.1.30): Metal IOAccel device/shared contract — DEFAULT ON.
+     * WindowServer/Metal probes the accelerator with newUserClient type 0x5
+     * (device) and 0x6 (shared) to run the IOAccelDeviceCreateWithAPIProperty
+     * handshake. MyIntelAccelClient::externalMethod already implements the
+     * type-5 selector set (9/2/10 + default-ok, exercised in M2C discovery),
+     * but this gate rejected the client outright, so Metal activation could
+     * never begin — this is the single blocking point for that path.
+     * Rationale (Bugfix Rule — why this is safe as default-ON):
+     *  1. 0x5/0x6 เป็นสัญญาเปิดของ Metal/WindowServer ต้อง default-on ทุก boot —
+     *     ไม่ควรอยู่หลัง myintelpassthru boot-arg (default-off experiment).
+     *  2. ผูก bound ด้วย counter (kMaxConcurrentMetalClients=2) กัน flood แบบ
+     *     2026-09-17 ("Too many corpses being created" จาก unbounded fake-client
+     *     creation) — เกิน bound -> kIOReturnExclusiveAccess (reject มีขอบเขต,
+     *     ไม่สร้าง client มั่วซ้ำ).
+     *  3. นอก types เหล่านี้ behavior ไม่เปลี่ยน — คีย์แปลกปลอมยัง REJECT เหมือนเดิม. */
+    if (type == 5 || type == 6) {
+        if (OSIncrementAtomic(&gMetalClientCount) > kMaxConcurrentMetalClients) {
+            OSDecrementAtomic(&gMetalClientCount);
+            AccelDebug("newUserClient: metal client count > %d — EXCLUSIVE (bounded reject)",
+                       (int)kMaxConcurrentMetalClients);
+            return kIOReturnExclusiveAccess;
+        }
+        MyIntelAccelClient *client = new MyIntelAccelClient;
+        if (!client) {
+            OSDecrementAtomic(&gMetalClientCount);
+            return kIOReturnNoMemory;
+        }
+        if (!client->initWithTask(resettingTask, securityID, type, properties)) {
+            client->release();
+            OSDecrementAtomic(&gMetalClientCount);
+            return kIOReturnError;
+        }
+        if (!client->attach(this)) {
+            client->release();
+            OSDecrementAtomic(&gMetalClientCount);
+            return kIOReturnError;
+        }
+        if (!client->start(this)) {
+            client->detach(this);
+            client->release();
+            OSDecrementAtomic(&gMetalClientCount);
+            return kIOReturnError;
+        }
+        *handler = client;
+        AccelDebug("newUserClient: METAL client type=0x%X created (task %p)",
+                   (unsigned int)type, resettingTask);
+        return kIOReturnSuccess;
+    }
+
+    /* 🚨 ท่อพักสายชั่วคราว (Pass-through Test) — GATED by boot-arg myintelpassthru=1.
+     *
+     * CRASH ROOT CAUSE (2026-09-17): WindowServer probes the accelerator with
+     * newUserClient type 0x5/0x6 in a tight flood. Unbounded fake-client creation
+     * here triggered "Too many corpses being created" cascade (WindowServer/Finder
+     * crash-loop at 20:04/20:06/20:47) -> reboot. DEFAULT = clean reject so default
+     * boots are stable; the experiment stays available behind the boot-arg. */
+    char ptArg[8];
+    bool ptEnabled = (PE_parse_boot_argn("myintelpassthru", ptArg, sizeof(ptArg)) && ptArg[0] == '1');
+    if (ptEnabled && type >= 0 && type <= 0x30) {
         MyIntelAccelClient *testClient = new MyIntelAccelClient;
         if (testClient) {
             if (testClient->initWithTask(resettingTask, securityID, type, properties) &&
@@ -169,10 +233,18 @@ bool MyIntelAccelerator::publishProperties(void)
 {
     bool ok = true;
 
-    setProperty("model", "Intel® Graphics");
+    /* model — System Profiler GPU naming (real silicon: Raptor Lake-U 0xA7AC) */
+    setProperty("model", "Intel Iris Xe");
 
     /* IOAccelIndex — standard accelerator ordinal */
     setProperty("IOAccelIndex", 0ULL, 32);
+
+    /* 2026-09-17 NATIVE ACCELERATOR MARKERS (user directive + Apple vocab):
+     * "IOAccelerator"=true + "IOAcceleratorType"="GPU" — the same markers
+     * AGX/AppleParavirtGPU publish so WindowServer/Metal classify this node
+     * as a GPU accelerator instead of a plain IOService. */
+    setProperty("IOAccelerator", kOSBooleanTrue);
+    setProperty("IOAcceleratorType", "GPU");
 
     /* IOSourceVersion — 6-byte OSData (SP reads it) */
     {
@@ -245,151 +317,37 @@ bool MyIntelAccelerator::publishProperties(void)
 
     bool r;
     /*  VT codec discovery — AppleGVA reads these on IOAccelerator
-     *
-     *  Reference (authoritative, same GPU generation):
-     *    KDK_14.8.4_23J319.kdk :: System/Library/Extensions/
-     *      AppleIntelKBLGraphics.kext  (v22.0.5) :: :IOKitPersonalities:Gen7
-     *  Apple's Gen7 personality carries IOClass = IntelAccelerator, i.e. Apple
-     *  publishes these on the ACCELERATOR node. Our personality matches
-     *  IOClass = MyIntelGPU (the parent), so the same contract has to be
-     *  published here in code — putting it in Info.plist would land it on the
-     *  parent node where the GVA/VCS stack never looks.
-     *
-     *  Every name and value below is copied verbatim from Apple's plist.
-     *  Nothing here is invented. */
-    r = setProperty("IOGVACodec", "Gen95");             AccelDebug("  IOGVACodec=%d", (int)r);
-    r = setProperty("IOGVABGRAEnc", "Gen95");           AccelDebug("  IOGVABGRAEnc=%d", (int)r);
-    r = setProperty("IOGVAScaler",  "Gen95");           AccelDebug("  IOGVAScaler=%d", (int)r);
-
-    /* Engine counts are NUMBERS in Apple's plist (IOGVAXDecode = 2), not the
-     * strings "1" this driver used to publish. AppleGVA type-checks these, so
-     * a CFString where it expects CFNumber is ignored. */
-    r = setProperty("IOGVAXDecode",    (uint32_t)2, 32); AccelDebug("  IOGVAXDecode=%d", (int)r);
-    r = setProperty("IOGVAHEVCDecode", (uint32_t)2, 32); AccelDebug("  IOGVAHEVCDecode=%d", (int)r);
-    r = setProperty("IOGVAHEVCEncode", (uint32_t)2, 32); AccelDebug("  IOGVAHEVCEncode=%d", (int)r);
-    r = setProperty("IOGVAH264Decode", (uint32_t)2, 32); AccelDebug("  IOGVAH264Decode=%d", (int)r);
-    r = setProperty("IOGVAH264Encode", (uint32_t)2, 32); AccelDebug("  IOGVAH264Encode=%d", (int)r);
-
-    /* IOGVA_AV1Decode / IOGVP9Decode — restored on purpose.
-     *
-     * These were dropped as collateral when the rest of the GVA contract
-     * was aligned with Apple's Gen7 plist. That was wrong: Apple's KBL
-     * personality has no AV1/VP9 keys because SKYLAKE has no AV1/VP9
-     * hardware, but our silicon is Raptor Lake (0xA7AC), which does, and
-     * this machine ships /System/Library/Video/Plug-Ins/AppleGVAVPXDecoder.bundle
-     * to consume it.
-     *
-     * Values are the ORIGINAL "1" strings, not Apple's numeric style.
-     * There is no Apple reference for these two keys, so there is nothing
-     * to justify changing their value — keep them exactly as they were.
-     * Do not remove them without an actual Raptor Lake reference. */
-    r = setProperty("IOGVA_AV1Decode", "1"); AccelDebug("  IOGVA_AV1Decode=%d", (int)r);
-    r = setProperty("IOGVP9Decode",    "1"); AccelDebug("  IOGVP9Decode=%d", (int)r);
-
-    r = setProperty("IOVARendererID", (uint64_t)17301536, 32); AccelDebug("  IOVARendererID=%d", (int)r);
-
-    /* IODVDBundleName — the one genuinely missing key. AppleGVAHEVCDecoder/
-     * Encoder dlopen this exact bundle:
-     *   AppleIntelKBLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelKBLGraphicsVADriver
-     * and the bundle really ships on this box:
-     *   /System/Library/Extensions/AppleIntelKBLGraphicsVADriver.bundle (26.7 MB)
-     * Without this key the media stack has no VA driver to hand work to,
-     * which is exactly the VT_HW_ACCEL_ABSENT signature. */
-    r = setProperty("IODVDBundleName", "AppleIntelKBLGraphicsVADriver"); AccelDebug("  IODVDBundleName=%d", (int)r);
-
-    /* IOGVA*Capabilities — these are the "13 capability keys" the earlier
-     * investigation could not locate. They are three NESTED DICTIONARIES on
-     * the Apple side, holding VT* leaves. Names/values verbatim from Gen7. */
-    {
-        /* IOGVAH264EncodeCapabilities = { VTRating = 400, VTQualityRating = 50 } */
-        OSDictionary *h264Enc = OSDictionary::withCapacity(2);
-        if (h264Enc) {
-            OSNumber *rate = OSNumber::withNumber((uint32_t)400, 32);
-            OSNumber *qual = OSNumber::withNumber((uint32_t)50, 32);
-            if (rate) { h264Enc->setObject("VTRating", rate);         rate->release(); }
-            if (qual) { h264Enc->setObject("VTQualityRating", qual);   qual->release(); }
-            setProperty("IOGVAH264EncodeCapabilities", h264Enc);
-            h264Enc->release();
-        }
-    }
-    {
-        /* IOGVAHEVCDecodeCapabilities = profiles 1,2,3 at VTMaxDecodeLevel 186
-         *                                 + VTSupportedProfileArray [1,2,3]
-         * NOTE: in Apple's plist the VTPerProfileDetails keys are STRINGS
-         * ("1".."3"), not numbers — OSDictionary::setObject takes a
-         * const char* / OSString / OSSymbol key, never an OSNumber. */
-        static const char * const kProfKey[3] = { "1", "2", "3" };
-        OSDictionary *perProf = OSDictionary::withCapacity(3);
-        OSArray     *decArr  = OSArray::withCapacity(3);
-        if (perProf && decArr) {
-            for (int i = 0; i < 3; i++) {
-                OSDictionary *pd = OSDictionary::withCapacity(1);
-                if (pd) {
-                    OSNumber *lvl = OSNumber::withNumber((uint32_t)186, 32);
-                    if (lvl) { pd->setObject("VTMaxDecodeLevel", lvl); lvl->release(); }
-                    perProf->setObject(kProfKey[i], pd);
-                    pd->release();
-                }
-                OSNumber *pa = OSNumber::withNumber((uint32_t)(i + 1), 32);
-                if (pa) { decArr->setObject(pa); pa->release(); }
-            }
-            OSDictionary *hevcDec = OSDictionary::withCapacity(2);
-            if (hevcDec) {
-                hevcDec->setObject("VTPerProfileDetails", perProf);
-                hevcDec->setObject("VTSupportedProfileArray", decArr);
-                setProperty("IOGVAHEVCDecodeCapabilities", hevcDec);
-                hevcDec->release();
-            }
-        }
-        if (perProf) perProf->release();
-        if (decArr)  decArr->release();
-    }
-    {
-        /* IOGVAHEVCEncodeCapabilities = profiles 1,2 at VTMaxEncodeLevel 156
-         *                                 + VTRating 100, VTQualityRating 80
-         *                                 + VTSupportedProfileArray [1,2] */
-        static const char * const kProfKey[2] = { "1", "2" };
-        OSDictionary *perProf = OSDictionary::withCapacity(2);
-        OSArray     *encArr  = OSArray::withCapacity(2);
-        if (perProf && encArr) {
-            for (int i = 0; i < 2; i++) {
-                OSDictionary *pd = OSDictionary::withCapacity(1);
-                if (pd) {
-                    OSNumber *lvl = OSNumber::withNumber((uint32_t)156, 32);
-                    if (lvl) { pd->setObject("VTMaxEncodeLevel", lvl); lvl->release(); }
-                    perProf->setObject(kProfKey[i], pd);
-                    pd->release();
-                }
-                OSNumber *pa = OSNumber::withNumber((uint32_t)(i + 1), 32);
-                if (pa) { encArr->setObject(pa); pa->release(); }
-            }
-            OSDictionary *hevcEnc = OSDictionary::withCapacity(4);
-            if (hevcEnc) {
-                hevcEnc->setObject("VTPerProfileDetails", perProf);
-                hevcEnc->setObject("VTSupportedProfileArray", encArr);
-                OSNumber *rate = OSNumber::withNumber((uint32_t)100, 32);
-                OSNumber *qual = OSNumber::withNumber((uint32_t)80, 32);
-                if (rate) { hevcEnc->setObject("VTRating", rate);        rate->release(); }
-                if (qual) { hevcEnc->setObject("VTQualityRating", qual); qual->release(); }
-                setProperty("IOGVAHEVCEncodeCapabilities", hevcEnc);
-                hevcEnc->release();
-            }
-        }
-        if (perProf) perProf->release();
-        if (encArr)  encArr->release();
-    }
-
-    /* GPURawCounter* — present in Apple's Gen7, absent here. Points at
-     * IGGPURawCounterSourceGroup, the AGPM raw-counter group. */
-    r = setProperty("GPURawCounterBundleName", "AppleIntelKBLGraphicsMTLDriver"); AccelDebug("  GPURawCounterBundleName=%d", (int)r);
-    r = setProperty("GPURawCounterPluginClassName", "IGGPURawCounterSourceGroup");  AccelDebug("  GPURawCounterPluginClassName=%d", (int)r);
-
-    /* Native bridge mode deliberately ships no userspace GL/Metal plugin of
-     * its own, so renderer bundle names stay in the personality (parent node).
-     * The GVA keys above are different: they are consumed on THIS node, which
-     * is why they live in code rather than in Info.plist. */
+     *  Property names from iMac20,1 / AppleIO / AGX kext extracts
+     *  IOGVACodec tells AppleGVA which GPU generation to look for
+     *  IOGVA*Decode/Encode = "1" means HW codec available            */
+    r = setProperty("IOGVACodec",      "Gen12HP");          AccelDebug("  IOGVACodec=%d", (int)r);
+    r = setProperty("IOVARendererID",  (uint64_t)0x1080100, 32); AccelDebug("  IOVARendererID=%d", (int)r);
+    /* 2026-09-17 REAL ICL VOCAB (from /System/Library/Extensions/AppleIntelICLGraphics.kext
+     * Gen7 personality): AppleGVA discovers the HW codec via IOGVAXDecode (integer,
+     * 2 = Gen12 decode enabled) and loads the VA user-space bundle via IODVDBundleName.
+     * Both replace the earlier string-based guesses; kept parallel so old clients
+     * that read IOGVAH264Decode still see a codec. */
+    r = setProperty("IOGVAXDecode",    (uint64_t)2, 32);    AccelDebug("  IOGVAXDecode=%d", (int)r);
+    r = setProperty("IODVDBundleName", "AppleIntelICLGraphicsVADriver"); AccelDebug("  IODVDBundle=%d (Apple Intel ICL VA)", (int)r);
+    r = setProperty("IOGVAH264Decode", "1");                AccelDebug("  IOGVAH264Decode=%d", (int)r);
+    r = setProperty("IOGVAH264Encode", "1");                AccelDebug("  IOGVAH264Encode=%d", (int)r);
+    r = setProperty("IOGVAHEVCDecode", "1");                AccelDebug("  IOGVAHEVCDecode=%d", (int)r);
+    r = setProperty("IOGVAHEVCEncode", "1");                AccelDebug("  IOGVAHEVCEncode=%d", (int)r);
+    r = setProperty("IOGVA_AV1Decode", "1");                AccelDebug("  IOGVA_AV1Decode=%d", (int)r);
+    r = setProperty("IOGVP9Decode",    "1");                AccelDebug("  IOGVP9Decode=%d", (int)r);
+         /* 2026-09-17 APPLE NATIVE BUNDLE DIRECTIVE (user): point at the Apple
+     * ICL (Ice Lake) GL + Metal driver bundles that macOS ships in SLE:
+     *   IOGLBundleName = "AppleIntelICLGraphicsGLDriver"   (exists: AppleIntelICLGraphicsGLDriver.bundle)
+     *   MetalPluginName = "AppleIntelICLGraphicsMTLDriver" (exists: AppleIntelICLGraphicsMTLDriver.bundle)
+     * MetalPluginClassName is NOT set — Apple's own Intel kexts rely on the
+     * bundle's NSPrincipalClass (MTLIGAccelDevice); libigdmd.dylib (the core
+     * of the MTL bundle) links IOAccelerator.framework, not IOGPU, so it talks
+     * to the kernel through the IOAccelerator user-client contract that this
+     * class already implements (type-5 M2C probe: sel=2 caps / sel=9 apiName).
+     * Our kext stays the kernel-side middleman (native driver); Apple's
+     * bundles supply the Metal/GL userspace.  */
     r = setProperty("MetalStatisticsName", "Intel(R) Iris(R) Xe Graphics"); AccelDebug("  MetalStats=%d", (int)r);
-    AccelDebug("publishProperties: AppleGVA contract published on accelerator node");
+    /* Gen9 plugin binding removed — AppleIntelKBLGraphics* bundles don't exist on Gen12 */
 
 
     return ok;
@@ -434,6 +392,12 @@ bool MyIntelAccelClient::start(IOService *provider)
 
 IOReturn MyIntelAccelClient::clientClose(void)
 {
+    /* Path B (v3.1.30): release the bounded type-5/6 slot claimed in
+     * newUserClient so a closed Metal client frees capacity for the next
+     * WindowServer session instead of leaking toward the exclusive bound. */
+    if (fClientType == 5 || fClientType == 6) {
+        OSDecrementAtomic(&gMetalClientCount);
+    }
     if (fDirtyRingMap) { fDirtyRingMap->release(); fDirtyRingMap = NULL; }
     if (fDirtyRingMD) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; }
     fDirtyRingUserVA = 0;
@@ -548,7 +512,7 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
         const uint8_t *discP = (const uint8_t *)arguments->structureInput;
         uint32_t discN = (uint32_t)(arguments->structureInputSize < 16 ?
                                     arguments->structureInputSize : 16);
-        char discHex[3 * 16];
+        char discHex[3 * 16 + 1];
         uint32_t discPos = 0;
         for (uint32_t discI = 0; discI < discN; discI++) {
             discHex[discPos++] = "0123456789ABCDEF"[discP[discI] >> 4];
@@ -746,7 +710,7 @@ IOReturn MyIntelAccelClient::sGetInfo(MyIntelAccelClient *client,
     }
 
     MyIntelAccelInfo info = {};
-    info.accelID       = client->fAccel->getAccelID();
+  info.accelID       = static_cast<uint32_t>(client->fAccel->getAccelID());
 
     MyIntelGPU *gpu = client->fAccel->getGPU();
     if (gpu) {

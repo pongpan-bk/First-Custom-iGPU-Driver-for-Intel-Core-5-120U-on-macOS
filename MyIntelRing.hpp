@@ -83,6 +83,18 @@
 #define RING_PP_DIR_BASE_OFFSET     0x228   /* PPGTT Directory Base Address */
 #define RING_MODE_GEN7_OFFSET       0x29C   /* Gen7+ Ring Mode (PPGTT Enable) */
 
+/* Per-engine power/forcewake — Windows igdkmdn64.sys 32.0.101.5972 mining
+ * (raw 0x3EC783/0x45D837 refs): BCS RC6-exit WA polls RING_PSMI_CTL
+ * (base+0x50) bit16=FW_WAIT with mask 0x10000 and asserts per-engine
+ * FORCEWAKE (base+0xA8)/ACK (base+0xAC) — the blitter domain, distinct from
+ * the global FORCEWAKE_GT(0xA188)/RENDER(0xA278) the kext already wakes. */
+#define RING_PSMI_CTL_OFFSET        0x50    /* RING_PSMI_CTL(base) = base + 0x50 */
+#define PSMI_CTL_FORCE_WAKE         (1U << 8)   /* bit8 force-wake request */
+#define PSMI_CTL_RC6_EXIT_LATENCY   ((0x1Fu) << 1) /* bits5:1 RC6 exit latency */
+#define PSMI_CTL_FW_WAIT            (1U << 16)  /* bit16 force-wake wait in progress */
+#define RING_FORCEWAKE_OFFSET       0xA8    /* per-engine forcewake request */
+#define RING_FORCEWAKE_ACK_OFFSET   0xAC    /* per-engine forcewake acknowledge */
+
 /* Engine reset handshake register — i915 gt/intel_engine_regs.h RING_RESET_CTL
  * (masked register: bit31:16 = write mask, bit15:0 = data — i915 uses
  * REG_MASKED_FIELD_ENABLE(x) = (x<<16)|x and REG_MASKED_FIELD_DISABLE(x) = (x<<16)|0) */
@@ -146,7 +158,6 @@
 #define HWS_SEQNO_DWORD         0x20            /* I915_HWS_SEQNO_INDEX (byte 0x80) */
 #define HWS_SEQNO_ADDRESS(hwsp) ((hwsp) + (HWS_SEQNO_DWORD * 4))
 #define CONTEXT_STATUS_PTR_RESET \
-    ((0xffffU << 16) | ((HWS_CSB_ENTRIES_GEN11 - 1) << 8) | (HWS_CSB_ENTRIES_GEN11 - 1))
 
 /*
  * ─────────────────────────────────────────────
@@ -314,11 +325,6 @@ struct MyIntelRing {
     /* Max pending client batches queued before the next kick drains them */
 #define RING_PENDING_MAX            8
 
-    /* Worst-case bytes one kick appends: RING_PENDING_MAX × BB_START (4 dwords)
-     * + MI_FLUSH_DW (4) + MI_USER_INTERRUPT (1). Reserving it up front keeps
-     * ringBegin() from failing mid-sequence and stranding a drained queue. */
-#define kKickReserveBytes           ((RING_PENDING_MAX * 4 + 5) * 4)
-
     /* Pending client batch queue — F8b multi-batch: submitClientTaskViaRing()
      * appends up to RING_PENDING_MAX entries; kickCommandSet2Locked() drains
      * the whole queue in order (one BB_START per entry, then USER_INTERRUPT).
@@ -328,7 +334,6 @@ struct MyIntelRing {
         uint32_t          ggtt;        /* Batch GGTT offset for BB_START (0 = none) */
         uint32_t          taskType;    /* Client task type (kMyIntelTaskType_*) */
         uint64_t          packetData;  /* Client packet data (task payload) */
-        uint32_t          seqno;       /* Fence value stored once this batch retires */
     };
     PendingBatch      pendingQueue[RING_PENDING_MAX];
     uint32_t          pendingHead;    /* index of next entry to drain */
@@ -440,41 +445,20 @@ static inline bool ringIsFull(const MyIntelRing *ring)
  * torvalds/linux master 2026-08-11:
  *   MI_FLUSH_DW = MI_INSTR(0x26, 1) = 0x13000001 (gen6 3-dword base; the
  *   length field lives in bits 5:0 = dwords-2, so "1" = 3 dwords).
- * Gen12 xcs breadcrumb — i915 gt/gen6_engine_cs.c gen6_emit_breadcrumb_xcs()
- * (the xcs path used by Gen8+/DG1/RPL):
- *   *cs++ = MI_FLUSH_DW | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX;
- *   *cs++ = I915_GEM_HWS_SEQNO_ADDR | MI_FLUSH_DW_USE_GTT;
- *   *cs++ = rq->fence.seqno;
- *   *cs++ = MI_USER_INTERRUPT;
- * Verified encodings (linux-i915 gt/intel_gpu_commands.h):
- *   MI_FLUSH_DW            = MI_INSTR(0x26,1) = 0x13000001
- *   MI_FLUSH_DW_OP_STOREDW = 1<<14, MI_FLUSH_DW_STORE_INDEX = 1<<21,
- *   MI_FLUSH_DW_USE_GTT    = 1<<2
- *   → cmd dword0 = 0x13204001  (4 dwords; the header's length field already
- *     counts 3, so the Gen12 "+1" of the previous revision was wrong)
- *   I915_GEM_HWS_SEQNO = 0x40 (gt/intel_engine.h:190) → store target dword1
- *     = 0x40 | MI_FLUSH_DW_USE_GTT = 0x44. STORE_INDEX makes dword1 a GGTT
- *     address, which is where cleanupInFlightBatches() reads the seqno back
- *     (hwsp[I915_GEM_HWS_SEQNO_DWORD]) — the write and the read must agree.
- *   dword2 = the seqno value, dword3 = upper 32 bits of the address (0 on
- *     a 32-bit PPGTT identity map).
+ * Gen12 xcs form (i915 gen12_emit_flush_xcs, gt/gen8_engine_cs.c):
+ *   cmd = MI_FLUSH_DW + 1 | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX
+ *       = 0x13000002 | (1<<14) | (1<<21) = 0x13214002   (4 dwords)
+ *   dword1 = LRC_PPHWSP_SCRATCH_ADDR = 0x800 (offset within the context
+ *            PPHWSP; STORE_INDEX makes it a PPHWSP offset, not a GGTT addr)
+ *   dword2 = 0 (upper addr), dword3 = 0 (value written to PPHWSP scratch)
  * ⚠️ There are NO GFX/MEDIA/LLC "flush flag" bits in MI_FLUSH_DW dword1 —
  * the old kext encoding (0x07000007 dword1, invented flags) was wrong and
  * desynced the command parser. */
 #define MI_FLUSH_DW                 (0x13000000 | 1)   /* MI_INSTR(0x26, 1) */
 #define MI_FLUSH_DW_OP_STOREDW      (1U << 14)
 #define MI_FLUSH_DW_STORE_INDEX     (1U << 21)
-#define MI_FLUSH_DW_USE_GTT         (1U << 2)
-#define MI_FLUSH_DW_GEN12           (MI_FLUSH_DW | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX)  /* 0x13204001 */
+#define MI_FLUSH_DW_GEN12           (MI_FLUSH_DW + 1 | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX)  /* 0x13214002 */
 #define MI_FLUSH_DW_MEDIA_FLUSH     (1U << 1)
-#define I915_GEM_HWS_SEQNO          0x40u              /* i915 gt/intel_engine.h:190 — byte offset */
-#define I915_GEM_HWS_SEQNO_ADDR     (I915_GEM_HWS_SEQNO * 4u)  /* 0x100 */
-/* Dword index for hwspVaddr[]. I915_GEM_HWS_SEQNO is already a byte offset,
- * so dividing it by 4 again (hwsp[0x40/4] = hwsp[16]) read 8 dwords too early
- * and never saw the value the GPU stored. */
-#define I915_GEM_HWS_SEQNO_DWORD    (I915_GEM_HWS_SEQNO_ADDR / 4u)  /* 0x40 = 64 */
-/* Store address operand: GGTT address of the HWSP seqno slot. */
-#define MI_FLUSH_DW_SEQNO_ADDR      (I915_GEM_HWS_SEQNO_ADDR | MI_FLUSH_DW_USE_GTT)  /* 0x104 */
 #define LRC_PPHWSP_SCRATCH_ADDR     0x800u             /* i915 intel_lrc.h LRC_PPHWSP_PN(0)*PAGE + 0x800 */
 
 /* MFX_WAIT — Insert wait for pending media operations (Gen12+ VCS) */
@@ -915,8 +899,7 @@ bool ringEmitSurfacePresent(MyIntelRing *bcs,
  * @param flushMedia Media cache flush
  * @return true = success
  */
-bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia,
-                     uint32_t seqno = 0);
+bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia);
 
 /*!
  * @brief  Emit raw dwords into ring (for custom commands)

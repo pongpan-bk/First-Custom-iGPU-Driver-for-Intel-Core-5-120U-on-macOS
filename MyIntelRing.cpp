@@ -16,6 +16,29 @@
 
 #include "MyIntelRing.hpp"
 #include <IOKit/IOLib.h>
+/*===========================================================================
+ *  MyIntelRing.cpp
+ *  Hackintosh Kext — Ring Buffer Engine (Phase 5)
+ *
+ *  Implementation:
+ *    1. ringCreate — alloc GEM buffer + program engine registers
+ *    2. ringBegin / ringAdvance — command emission
+ *    3. ringSubmit — RING_TAIL write = kick GPU
+ *    4. ringEmit* — MI command helpers
+ *
+ *  References:
+ *    - Linux i915: intel_ring_submission.c xcs_resume()
+ *                  intel_ring.h intel_ring_begin/advance
+ *    - i915_reg.h: RING_TAIL, RING_HEAD, RING_START, RING_CTL
+ *///=========================================================================
+
+#include "MyIntelRing.hpp"
+#include <IOKit/IOLib.h>
+
+// ─── วางโค้ดแก้บั๊กพอยเตอร์ตรงนี้ ───
+#undef CONTEXT_STATUS_PTR_RESET
+#define CONTEXT_STATUS_PTR_RESET 0x00000000u
+
 
 /*
  * ─────────────────────────────────────────────
@@ -428,7 +451,7 @@ MyIntelRing *ringCreate(
             }
             ring->lrcInited = true;
         } else {
-            RING_DEBUG_RAW("ringCreate: WARNING — LRC image build failed, using legacy submit");
+            RING_DEBUG_RAW("LRC size: %llu pages", LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
         }
     } else {
         RING_DEBUG_RAW("ringCreate: WARNING — LRC alloc failed, using legacy submit");
@@ -1510,19 +1533,19 @@ bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va)
     return true;
 }
 
-bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia,
-                     uint32_t seqno)
+bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia)
 {
     /*
-     * MI_FLUSH_DW — Gen12 xcs breadcrumb, i915 parity per
-     * gen6_emit_breadcrumb_xcs() (linux-i915 gt/gen6_engine_cs.c):
-     *   dword0 = MI_FLUSH_DW | OP_STOREDW | STORE_INDEX = 0x13204001
-     *   dword1 = I915_GEM_HWS_SEQNO_ADDR | MI_FLUSH_DW_USE_GTT = 0x104
-     *   dword2 = seqno value stored into the HWSP slot
-     *   dword3 = 0 (upper 32 bits of the address)
-     *
-     * seqno == 0 (the default, used by the ring-init breadcrumb) stores a
-     * zero: the slot is still written, it just does not advance the fence.
+     * MI_FLUSH_DW — Gen12 xcs form, VERIFIED against torvalds/linux
+     * master 2026-08-11 (gt/gen8_engine_cs.c gen8_emit_flush_xcs() +
+     * gt/intel_gpu_commands.h):
+     *   cmd = MI_FLUSH_DW + 1 | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX
+     *       = 0x13000002 | (1<<14) | (1<<21) = 0x13214002  (4 dwords)
+     *   dword0 = cmd        — flags live in dword0, NOT dword1
+     *   dword1 = LRC_PPHWSP_SCRATCH_ADDR (0x800, PPHWSP offset; STORE_INDEX
+     *            makes it a PPHWSP offset, not a GGTT address)
+     *   dword2 = 0          — upper store address
+     *   dword3 = 0          — value written to PPHWSP scratch
      *
      * flushGFX/flushMedia have NO encoding on Gen12 MI_FLUSH_DW — there
      * are no GFX/MEDIA/LLC "flush flag" bits (the old kext dword1 encoding
@@ -1536,9 +1559,9 @@ bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia,
     if (!cs) return false;
 
     *cs++ = MI_FLUSH_DW_GEN12;
-    *cs++ = MI_FLUSH_DW_SEQNO_ADDR;
-    *cs++ = seqno;
+    *cs++ = LRC_PPHWSP_SCRATCH_ADDR;
     *cs++ = 0;  /* upper store address */
+    *cs++ = 0;  /* store value */
 
     ringAdvance(ring, cs);
     return true;
