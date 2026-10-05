@@ -15,12 +15,12 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1.3</string>
+	<string>4.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>3.1.38</string>
+	<string>4.1.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>Universal_AutoMatch_GPU</key>
+		<key>MyIntelGPU_RPL_P</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.pongpan-bk.MyIntelGPU</string>
@@ -28,49 +28,29 @@
 			<string>MyIntelGPU</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
-			<key>IOPCIClassMatch</key>
-			<string>0x03000000&amp;0xff000000</string>
 			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
+			<string>0xA7AC8086</string>
+			<key>IOPCISubsystems</key>
+			<dict>
+				<key>192E1025</key>
+				<string>Acer</string>
+			</dict>
 			<key>IOProbeScore</key>
-			<integer>20000</integer>
+			<integer>3000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
 			<data>
-			EAAAAA==
+			TIpLAA==
 			</data>
-			<key>MetalPluginName</key>
-			<string>AppleIntelKBLGraphicsMTLDriver.bundle</string>
-			<key>IOGLBundleName</key>
-			<string>AppleIntelKBLGraphicsGLDriver.bundle</string>
 			<key>MetalStatisticsName</key>
-			<string>Intel Graphics</string>
+			<string>Raptor Lake-P</string>
 			<key>model</key>
-			<string>Integrated GPU</string>
-		</dict>
-		<key>Universal_AutoMatch_Framebuffer</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.pongpan-bk.MyIntelGPU</string>
-			<key>IOClass</key>
-			<string>MyIntelFramebuffer</string>
-			<key>IOMatchCategory</key>
-			<string>IOFramebuffer</string>
+			<string>Intel UHD Graphics (Raptor Lake-P)</string>
+			<key>IOPCIPrimaryMatch</key>
+			<string>0xA7AC8086</string>
 			<key>IOPCIClassMatch</key>
-			<string>0x03000000&amp;0xff000000</string>
-			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
-			<key>IOProbeScore</key>
-			<integer>20000</integer>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-			<key>device-id</key>
-			<data>
-			rKcAAA==
-			</data>
-			<key>framebuffer-patch-enable</key>
-			<integer>1</integer>
+			<string>0x03000000&0xFFFF0000</string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
@@ -80,17 +60,21 @@
 	<key>OSBundleLibraries</key>
 	<dict>
 		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>2.1</string>
+		<string>597</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
-		<string>1.0</string>
+		<string>2.9</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>10.0.0d0</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>10.0.0d0</string>
+		<string>23.0.0</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>10.0.0d0</string>
+		<string>23.0.0</string>
+		<key>com.apple.kpi.mach</key>
+		<string>23.0.0</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>23.0.0</string>
 	</dict>
 	<key>OSBundleRequired</key>
-	<string>Root</string>
+	<string>Safe Boot</string>
 </dict>
 </plist>
