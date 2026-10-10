@@ -20,23 +20,22 @@
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include "MyIntelGPU.hpp"
+#include "MyIntelEDIDParser.hpp"
 
 #pragma mark - Constants
 
-#define MYFB_MODE_COUNT         1
-#define MYFB_DISPLAY_MODE_ID    1
+#define MYFB_MAX_MODES           16
+#define MYFB_DEFAULT_MODE_ID     1
 
-#define MYFB_H_ACTIVE           1920
-#define MYFB_V_ACTIVE           1080
-#define MYFB_BITS_PER_PIXEL     32
-#define MYFB_BYTES_PER_PIXEL    4
-#define MYFB_BYTES_PER_ROW      (MYFB_H_ACTIVE * MYFB_BYTES_PER_PIXEL)
-#define MYFB_PLANE_STRIDE_64B   (MYFB_BYTES_PER_ROW / 64) /* 7680 / 64 = 120 (0x78) in 64B units */
-#define MYFB_BITS_PER_COMP      8
-#define MYFB_REFRESH_RATE       60
+#define MYFB_DEFAULT_H_ACTIVE    1920
+#define MYFB_DEFAULT_V_ACTIVE    1080
+#define MYFB_BITS_PER_PIXEL      32
+#define MYFB_BYTES_PER_PIXEL     4
+#define MYFB_BITS_PER_COMP       8
+#define MYFB_DEFAULT_REFRESH     60
 
-#define MYFB_BRIGHTNESS_MAX     100
-#define MYFB_BRIGHTNESS_DEFAULT 80
+#define MYFB_BRIGHTNESS_MAX      100
+#define MYFB_BRIGHTNESS_DEFAULT  80
 
 #pragma mark - MyIntelFramebuffer Class
 
@@ -113,6 +112,12 @@ public:
     /* 2.0.223: diagnostic counter dump (ALIVE tick / stop()) */
     void dumpDiagnostics(void) const;
 
+    /* Phase 8: Dynamic EDID/Mode support */
+    bool detectAndParseEDID(void);
+    void buildModeListFromEDID(void);
+    IOReturn getModeInfoForIndex(UInt32 index, IODisplayModeInformation *info) const;
+    IOReturn getPixelInfoForIndex(UInt32 index, IOIndex depth, IOPixelAperture aperture, IOPixelInformation *pixelInfo) const;
+
 private:
     MyIntelGPU          *fGPU;
     IODisplayModeID      fCurrentModeID;
@@ -133,9 +138,25 @@ private:
     IOTimerEventSource  *fLocationTimer;
     static void locationTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
+    /* Dynamic mode list from EDID */
+    struct DisplayMode {
+        IODisplayModeID modeID;
+        IODisplayModeInformation info;
+        IOPixelInformation pixelInfo;
+        bool valid;
+    };
+    DisplayMode          fModes[MYFB_MAX_MODES];
+    UInt32               fModeCount;
+    MyIntelEDIDParser   *fEDIDParser;
+    bool                 fEDIDParsed;
+
     void setupDefaultMode(void);
     bool createVRAMDescriptor(void);
     void publishIORegistryProperties(void);
+    void initModeFromTiming(UInt32 index, const MyIntelEDIDParser::DetailedTiming *t);
+
+    /* Friend for EDID parser access */
+    friend class MyIntelEDIDParser;
 };
 
 #endif /* __MY_INTEL_FRAMEBUFFER_HPP__ */

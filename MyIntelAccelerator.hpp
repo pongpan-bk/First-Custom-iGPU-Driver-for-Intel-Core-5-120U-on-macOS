@@ -17,7 +17,7 @@
 #ifndef __MY_INTEL_ACCELERATOR_HPP__
 #define __MY_INTEL_ACCELERATOR_HPP__
 
-#include <IOKit/graphics/IOAccelerator.h>
+#include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/graphics/IOAccelerator.h>
 #include <IOKit/graphics/IOAccelSurfaceConnect.h>
@@ -138,6 +138,7 @@ private:
     IOBufferMemoryDescriptor *fDirtyRingMD;
     IOMemoryMap *fDirtyRingMap;
     mach_vm_address_t fDirtyRingUserVA;
+
 };
 
 #endif /* __MY_INTEL_ACCELERATOR_HPP__ */

@@ -2,7 +2,6 @@
 #define __MY_INTEL_VCS_CLIENT_H__
 
 #include <IOKit/IOUserClient.h>
-#include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include "MyIntelGEMBuffer.hpp"
 #include "myintel_vcs_user.h"
@@ -40,30 +39,6 @@ struct VCSGemSlot {
     MyIntelGEMBuffer *buf;
     bool              active;
 };
-
-/*
- * MyIntelVCSNub — publishing node for MyIntelVCSClient
- *
- * A bare IOService cannot serve IOServiceOpen(): the inherited
- * IOService::newUserClient() returns kIOReturnUnsupported (0xE00002C7), so
- * setting the "IOUserClient" property alone never constructs a client.
- * MyIntelGPU escapes this because it overrides newUserClient() itself.
- * This subclass does the same for the VCS nub, driving the full
- * initWithTask -> attach() -> start() lifecycle that
- * is_io_service_open_extended() does NOT perform for us.
- *
- * Must be published as a child of MyIntelGPU so that
- * MyIntelVCSClient::start() can walk nub -> MyIntelGPU via getProvider().
- */
-class MyIntelVCSNub : public IOService {
-    OSDeclareDefaultStructors(MyIntelVCSNub)
-
-public:
-    virtual IOReturn newUserClient(task_t resettingTask, void *securityID,
-                                    UInt32 type, OSDictionary *properties,
-                                    IOUserClient **handler) override;
-};
-
 class MyIntelVCSClient : public IOUserClient {
     OSDeclareDefaultStructors(MyIntelVCSClient)
 

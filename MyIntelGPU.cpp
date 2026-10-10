@@ -6,11 +6,7 @@
 #define DEC_BUFFER_IOUserClient "IOUserClient"
 #endif
 #ifndef DEC_BUFFER_VCSClient
-/* MUST match the string passed to OSDefineMetaClassAndStructors() in
- * MyIntelVCSClient.cpp. IOServiceOpen() resolves the "IOUserClient" property
- * as a metaclass name; a mismatch here fails with kIOReturnUnsupported
- * (0xE00002C7) and no user-space tool can ever reach the VCS client. */
-#define DEC_BUFFER_VCSClient "MyIntelVCSClient"
+#define DEC_BUFFER_VCSClient "MyIntelGPUVCSClient"
 #endif
 #ifndef DEC_BUFFER_GPUClient
 #define DEC_BUFFER_GPUClient "MyIntelGPUClient"
@@ -158,6 +154,8 @@ extern "C" {
 #define GEN11_INTR_ENGINE_INTR_MASK   0x0000FFFF
 #define GEN11_IIR_REG_SELECTOR(x)     (0x190070 + (x) * 4)
 #define GEN11_RCS0_RSVD_INTR_MASK     0x190090
+#define GEN11_BCS_RSVD_INTR_MASK      0x1900a0
+
 #define GT_RENDER_USER_INTERRUPT      (1U << 0)
 #define GT_CS_MASTER_ERROR_INTERRUPT  (1U << 3)
 #define GT_CONTEXT_SWITCH_INTERRUPT   (1U << 8)
@@ -1922,7 +1920,7 @@ void MyIntelGPU::sEdidTimerFired(OSObject *owner, IOTimerEventSource *sender)
         IOLog("MyIntelGPU: [EDID] injected KDB0924 before WindowServer window (t+%u)\n",
               (uint32_t)(kEdidMaxRetries - self->fEdidRetries + 1));
     else if (++self->fEdidRetries < kEdidMaxRetries) {
-        if (sender) sender->setTimeoutMS(100);
+        if (sender) sender->setTimeoutMS(500);
         if (self->fEdidDebug)
             IOLog("MyIntelGPU: [EDID] retry %u/%u — display node not ready yet\n",
                   self->fEdidRetries, (uint32_t)kEdidMaxRetries);
@@ -1954,10 +1952,10 @@ void MyIntelGPU::armEDIDPassthrough(void)
         fEdidTimer = NULL;
         return;
     }
-    fEdidTimer->setTimeoutMS(100);
+    fEdidTimer->setTimeoutMS(1000);
     fEdidRetries = 0;
     if (fEdidDebug)
-        IOLog("MyIntelGPU: [EDID] passthrough ARMED (t+100ms, retry every 100ms up to %u tries)\n",
+        IOLog("MyIntelGPU: [EDID] passthrough ARMED (t+1s, retry every 2s up to %u tries)\n",
               (uint32_t)kEdidMaxRetries);
 }
 
@@ -2230,8 +2228,9 @@ bool MyIntelGPU::accelPadProps(void)
     fAccelerator->setProperty("IOAccelTypes", accTypes, 32);
     uint32_t rendererID = 0x00001002u;              /* generic accel render id */
     fAccelerator->setProperty("IOVARendererID", &rendererID, sizeof(rendererID));
-    /* Gen9 plugin binding removed — AppleIntelICLGraphics* bundles don't exist on Gen12 */
-    IOLog("MyIntelGPU: [pad-props] injected IOAcceleratorClassName/IOAccelTypes/IOVARendererID onto live node\n");
+    fAccelerator->setProperty("IOGLBundleName", "MyIntelGPU");
+    IOLog("MyIntelGPU: [pad-props] injected IOAcceleratorClassName/IOAccelTypes/"
+          "IOVARendererID/IOGLBundleName onto live node\n");
     return true;
 }
 
@@ -2264,14 +2263,14 @@ bool MyIntelGPU::accelBCSReset(void)
     ring->head = ring->tail;
 
     if (ok) {
-         writeReg32(base + RING_HEAD_REG_OFFSET, 0);
-    readReg32(base + RING_HEAD_REG_OFFSET);
-    writeReg32(base + RING_TAIL_REG_OFFSET, 0);
-    readReg32(base + RING_TAIL_REG_OFFSET);
-    writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
-    readReg32(base + RING_MODE_GEN7_OFFSET);
-    writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET, 0x00000000u);
-    readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
+        writeReg32(base + RING_HEAD_REG_OFFSET, 0);
+        readReg32(base + RING_HEAD_REG_OFFSET);
+        writeReg32(base + RING_TAIL_REG_OFFSET, 0);
+        readReg32(base + RING_TAIL_REG_OFFSET);
+        writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
+        readReg32(base + RING_MODE_GEN7_OFFSET);
+        writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET, CONTEXT_STATUS_PTR_RESET);
+        readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
     }
     if (ok && ring->hwspGgtt) {
         writeReg32(base + RING_HWS_PGA_OFFSET, ring->hwspGgtt);
@@ -4425,7 +4424,7 @@ bool MyIntelGPU::start(IOService *provider)
                 fRingVCS ? "yes" : "no");
 
         if (fRingVCS) {
-            MyIntelVCSNub *vcsNub = new MyIntelVCSNub;
+            IOService *vcsNub = new IOService;
             if (vcsNub && vcsNub->init()) {
                 vcsNub->attach(this);
                 vcsNub->setName(DEC_BUFFER_VCS);
@@ -4545,11 +4544,8 @@ bool MyIntelGPU::start(IOService *provider)
      * and continue — accelerator creation can never fail start().
      */
     {
-        uint32_t accelArg = 0;
-        if (PE_parse_boot_argn("myintelaccel", &accelArg, sizeof(accelArg)) && accelArg != 0) {
-            mygpuProgress("start:P6c-accel");
-            createAcceleratorNode(accelArg);
-        }
+        mygpuProgress("start:P6c-accel");
+        createAcceleratorNode(kMyIntelAccelAttachUnderGPU);
     }
 
     /*
@@ -5554,7 +5550,7 @@ static MyIntelGEMBuffer *allocAndBuildBatchBuffer(MyIntelGPU *self, MyIntelRing 
     case kMyIntelTaskTypeBreadcrumb: {
         uint32_t seqno = (uint32_t)(packetData & 0xFFFFFFFFULL);
         if (seqno == 0) seqno = 0xBEEF0001;
-        uint32_t hwspGttClient = ring->hwspGgtt ? ring->hwspGgtt : clientGgttOffset;
+        uint32_t hwspGtt = ring->hwspGgtt ? ring->hwspGgtt : clientGgttOffset;
         dwCount = emitBreadcrumbSeqno(cmd, hwspGtt, seqno);
         break;
     }
@@ -5777,122 +5773,135 @@ kern_return_t MyIntelGPU::submitClientTaskViaRing(void *batchBuffer,
     return kIOReturnSuccess;
 }
 
-/* Hardware head position. On Gen12 execlists the RING_HEAD MMIO register
- * reads 0 — the live head lives in the LRC image at CTX_RING_HEAD, the same
- * source ringBegin() uses. */
-static uint32_t ringHardwareHead(MyIntelRing *ring)
+/*!
+ * @brief  Read hardware ring head from HWSP (for VCS/RCS)
+ *         On Gen12, the HW head is not directly readable from RING_HEAD
+ *         register when execlists is active. Instead we read from the
+ *         context status buffer in HWSP.
+ */
+uint32_t MyIntelGPU::ringHardwareHead(MyIntelRing *ring)
 {
-    if (!ring) return 0;
-    if (ring->lrcInited && ring->lrcVaddr) {
-        uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
-        return state[CTX_RING_HEAD];
-    }
-    return ring->head;
-}
-
-void MyIntelGPU::readRingStatus(uint64_t *out)
-{
-    if (!out) return;
-    for (int i = 0; i < 6; i++) out[i] = 0;
-
-    IOLock *lock = getEngineLock();
-    if (lock) IOLockLock(lock);
-
-    MyIntelRing *ring = fRingRCS;
-    if (ring && ring->magic == RING_MAGIC && ring->initialized) {
-        out[0] = ringHardwareHead(ring);
-        out[1] = ring->tail;
-        out[2] = ring->space;
-        out[3] = ring->pendingCount;
-        out[4] = ring->size;
-        if (ring->hwspVaddr)
-            out[5] = ((uint32_t *)ring->hwspVaddr)[HWS_SEQNO_DWORD];
-    }
-
-    if (lock) IOLockUnlock(lock);
-}
-
-void MyIntelGPU::waitBatchCompletion(uint32_t seqno, uint32_t timeoutMs,
-                                     uint64_t *done, uint64_t *completedSeqno,
-                                     uint64_t *pendingCount)
-{
-    if (done) *done = 0;
-    if (completedSeqno) *completedSeqno = 0;
-    if (pendingCount) *pendingCount = 0;
-
-    if (!fRingRCS || !fRingRCS->hwspVaddr) return;
-
-    const uint32_t *hwsp = (const uint32_t *)fRingRCS->hwspVaddr;
-    const uint32_t kSpin = 200;   /* IODelay(200us) per iteration */
-    uint32_t waited = 0;
-    const uint32_t kMaxIters = (timeoutMs == 0) ? 1 : (timeoutMs * 5);
-
-    for (uint32_t i = 0; i < kMaxIters; i++) {
-        uint32_t completed = hwsp[HWS_SEQNO_DWORD];
-        if (completedSeqno) *completedSeqno = completed;
-        if (pendingCount) {
-            IOLock *lock = getEngineLock();
-            if (lock) {
-                IOLockLock(lock);
-                *pendingCount = fRingRCS->pendingCount;
-                IOLockUnlock(lock);
+    if (!ring || !ring->hwspVaddr) return ring->head;
+    
+    /* Read RING_HEAD register directly (MMIO base + 0x34) */
+    uint32_t mmioHead = readReg32(ring->mmioBase + 0x34);
+    
+    /* Also read from HWSP CSB if available - the CSB write pointer
+     * at HWSP dword 0x2f (byte 0xbc) indicates the latest completed
+     * context. The head for that context is in the CSB entry. */
+    if (ring->hwspVaddr) {
+        volatile uint32_t *hwsp = ring->hwspVaddr;
+        uint32_t csbWritePtr = hwsp[0x2f];  /* ICL_HWS_CSB_WRITE_INDEX */
+        if (csbWritePtr < 12) {  /* HWS_CSB_ENTRIES_GEN11 = 12 */
+            uint64_t csbEntry = ((volatile uint64_t *)hwsp)[0x10 + csbWritePtr];
+            uint32_t csbHead = (uint32_t)(csbEntry & 0xFFFFFFFF);
+            if (csbHead != 0 && csbHead != 0xFFFFFFFF) {
+                return csbHead & (ring->size - 1);
             }
         }
-        /* Seqnos start at 1 and wrap at 2^32; plain >= is correct for the
-         * non-wrapping span a single batch wait can span. */
-        if (seqno == 0 || completed >= seqno) {
-            if (done) *done = 1;
-            return;
-        }
-        if (timeoutMs == 0) return;
-        IODelay(kSpin);
-        waited++;
     }
+    
+    return mmioHead & (ring->size - 1);
 }
 
-uint32_t MyIntelGPU::submitUserBatch(MyIntelGEMBuffer *buf, uint32_t dwords)
+/*!
+ * @brief  Submit a user-provided batch buffer (ExecBatch - selector 12)
+ *         The user provides a GEM buffer with commands already staged.
+ *         We map it into PPGTT and submit via BB_START.
+ */
+kern_return_t MyIntelGPU::submitUserBatch(MyIntelRing *ring, uint32_t batchGGTT,
+                                          uint32_t taskType, uint64_t packetData)
 {
-    if (!fAccelInitialized || !fRingCallbacks) return 0;
-
-    MyIntelRing *ring = fRingRCS;
-    if (!ring || !ringIsInitialized(ring)) return 0;
-    if (!buf || buf->magic != GEM_BUFFER_MAGIC) return 0;
-    if (dwords == 0 || dwords > (buf->size / 4)) return 0;
-
+    if (!fAccelInitialized || !fRingCallbacks || !ring || !ringIsInitialized(ring)) {
+        IODebug("submitUserBatch: SKIP (not ready)");
+        return kIOReturnNotReady;
+    }
+    if (batchGGTT == 0) {
+        IODebug("submitUserBatch: SKIP (batchGGTT == 0)");
+        return kIOReturnBadArgument;
+    }
+    
     IOLock *lock = getEngineLock();
-    if (!lock) return 0;
-
+    if (!lock) return kIOReturnNotReady;
+    
     IOLockLock(lock);
     if (ring->pendingCount >= RING_PENDING_MAX) {
         IOLockUnlock(lock);
-        return 0;
+        IODebug("submitUserBatch: queue FULL");
+        return kIOReturnBusy;
     }
-    if (!lrcMapBatchPages(ring, buf->ggttOffset, buf->pagesPhys, buf->pages)) {
-        IOLockUnlock(lock);
-        IODebug("submitUserBatch: lrcMapBatchPages FAILED (ggtt=0x%X)", buf->ggttOffset);
-        return 0;
-    }
-    IOLockUnlock(lock);
-
+    
+    /* For now, we assume the batch is already mapped in PPGTT.
+     * The GGTT offset serves as the PPGTT VA in the identity map. */
+    
     uint32_t seqno = gNextSeqno++;
     if (seqno == 0) seqno = 1;
-    registerInFlightBatch(buf, seqno);
-
-    IOLockLock(lock);
+    
+    registerInFlightBatch(NULL, seqno);  /* No kernel buffer to track */
+    
     uint32_t slot = (ring->pendingHead + ring->pendingCount) % RING_PENDING_MAX;
-    ring->pendingQueue[slot].ggtt       = buf->ggttOffset;
-    ring->pendingQueue[slot].taskType   = kMyIntelTaskTypeUserBatch;
-    ring->pendingQueue[slot].packetData = dwords;
+    ring->pendingQueue[slot].ggtt       = batchGGTT;
+    ring->pendingQueue[slot].taskType   = taskType;
+    ring->pendingQueue[slot].packetData = packetData;
     ring->pendingCount++;
     ring->workPending = true;
     IOLockUnlock(lock);
-
+    
     kickCommandSet2();
-    if (fKickPending) kickCommandSet2();
+    
+    IODebug("submitUserBatch: queued batchGGTT=0x%X seqno=%u", batchGGTT, seqno);
+    return kIOReturnSuccess;
+}
 
-    IOLog("MyIntelGPU: [EXEC] user batch ggtt=0x%X dwords=%u seqno=%u\n",
-          buf->ggttOffset, dwords, seqno);
-    return seqno;
+/*!
+ * @brief  Wait for a batch to complete (WaitBatch - selector 13)
+ *         Polls the HWSP seqno until it reaches the target.
+ */
+kern_return_t MyIntelGPU::waitBatchCompletion(MyIntelRing *ring, uint32_t targetSeqno,
+                                              uint32_t timeoutMs)
+{
+    if (!ring || !ring->hwspVaddr) return kIOReturnNotReady;
+    
+    volatile uint32_t *hwsp = ring->hwspVaddr;
+    volatile uint32_t *hwspSeqno = &hwsp[0x20];  /* HWS_SEQNO_DWORD = 0x20 (byte 0x80) */
+    
+    uint64_t deadline = mach_absolute_time() + (timeoutMs * 1000000ULL);
+    uint32_t completed = 0;
+    
+    while (mach_absolute_time() < deadline) {
+        completed = *hwspSeqno;
+        if (completed >= targetSeqno) {
+            IODebug("waitBatchCompletion: seqno %u completed (target %u)", completed, targetSeqno);
+            return kIOReturnSuccess;
+        }
+        IOSleep(1);  /* 1ms poll */
+    }
+    
+    IODebug("waitBatchCompletion: TIMEOUT seqno=%u target=%u", completed, targetSeqno);
+    return kIOReturnTimeout;
+}
+
+/*!
+ * @brief  Read ring status (RingStatus - selector 14)
+ *         Returns head, tail, space, pending count.
+ */
+kern_return_t MyIntelGPU::readRingStatus(MyIntelRing *ring,
+                                         uint32_t *outHead, uint32_t *outTail,
+                                         uint32_t *outSpace, uint32_t *outPending)
+{
+    if (!ring || !ringIsInitialized(ring)) return kIOReturnNotReady;
+    
+    uint32_t head = ringHardwareHead(ring);
+    uint32_t tail = ring->tail;
+    uint32_t space = ringSpace(ring);
+    uint32_t pending = ring->pendingCount;
+    
+    if (outHead) *outHead = head;
+    if (outTail) *outTail = tail;
+    if (outSpace) *outSpace = space;
+    if (outPending) *outPending = pending;
+    
+    return kIOReturnSuccess;
 }
 
 #pragma mark -

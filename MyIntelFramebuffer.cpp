@@ -69,7 +69,7 @@ bool MyIntelFramebuffer::init(OSDictionary *dict)
     if (!super::init(dict)) return false;
 
     fGPU            = NULL;
-    fCurrentModeID  = MYFB_DISPLAY_MODE_ID;
+    fCurrentModeID  = MYFB_DEFAULT_MODE_ID;
     fCurrentDepth   = 0;
     fDisplayOn      = true;
     fFrameCounter   = 0;
@@ -83,8 +83,12 @@ bool MyIntelFramebuffer::init(OSDictionary *dict)
     fPowerOffCount  = 0;
     fApertureCount  = 0;
     fLocationTimer  = nullptr;
+    fModeCount      = 0;
+    fEDIDParser     = NULL;
+    fEDIDParsed     = false;
+    memset(fModes, 0, sizeof(fModes));
 
-    FBLog("init() OK - 1920x1080 @ 60Hz");
+    FBLog("init() OK - dynamic mode support");
     return true;
 }
 
@@ -98,6 +102,10 @@ void MyIntelFramebuffer::free()
     if (fVRAMDescriptor) {
         fVRAMDescriptor->release();
         fVRAMDescriptor = NULL;
+    }
+    if (fEDIDParser) {
+        fEDIDParser->release();
+        fEDIDParser = NULL;
     }
     fGPU = NULL;
     super::free();
@@ -120,6 +128,11 @@ bool MyIntelFramebuffer::start(IOService *provider)
         return false;
     }
     fGPU->retain();
+
+    /* Phase 8: Detect and parse EDID for dynamic mode support */
+    detectAndParseEDID();
+    buildModeListFromEDID();
+    mygpuProgress("mfb:edid-parsed");
 
     setupDefaultMode();
     mygpuProgress("mfb:mode-set");
@@ -151,8 +164,22 @@ bool MyIntelFramebuffer::start(IOService *provider)
             IORegistryEntry *ch;
             while ((ch = it->getNextObject())) {
                 if (OSDynamicCast(IODisplayConnect, ch)) {
-                    /* EDID on IODisplayConnect */
-                    OSData *edidDC = OSData::withBytes(gKDB0924_EDID, sizeof(gKDB0924_EDID));
+                    /* EDID on IODisplayConnect - use parsed EDID if available */
+                    OSData *edidDC = NULL;
+                    if (fEDIDParsed && fEDIDParser) {
+                        /* We need to reconstruct EDID from parsed data or use original */
+                        /* For now, use the original DDC read path */
+                        UInt8 edidBuf[128];
+                        IOByteCount edidLen = 128;
+                        IOReturn err = getDDCBlock(0, 0, 0, 0, edidBuf, &edidLen);
+                        if (err == kIOReturnSuccess && edidLen >= 128) {
+                            edidDC = OSData::withBytes(edidBuf, edidLen);
+                        }
+                    }
+                    if (!edidDC) {
+                        /* Fallback to hardcoded KDB0924 EDID */
+                        edidDC = OSData::withBytes(gKDB0924_EDID, sizeof(gKDB0924_EDID));
+                    }
                     if (edidDC) {
                         ch->setProperty("IODisplayEDID", edidDC);
                         edidDC->release();
@@ -195,7 +222,7 @@ bool MyIntelFramebuffer::start(IOService *provider)
         if (createdWL) workLoop->release();
     }
 
-    FBLog("start() OK");
+    FBLog("start() OK - %u modes available", fModeCount);
     mygpuProgress("mfb:start-done");
     return true;
 }
@@ -315,20 +342,27 @@ IOReturn MyIntelFramebuffer::getInformationForDisplayMode(
         IODisplayModeInformation *info)
 {
     if (!info) return kIOReturnBadArgument;
-    if (displayMode != MYFB_DISPLAY_MODE_ID)
-        return kIOReturnUnsupportedMode;
 
-    bzero(info, sizeof(IODisplayModeInformation));
-    info->nominalWidth    = MYFB_H_ACTIVE;
-    info->nominalHeight   = MYFB_V_ACTIVE;
-    info->refreshRate     = MYFB_REFRESH_RATE << 16; // 16.16 fixed point
-    info->maxDepthIndex   = 0;
-    info->flags           = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+    /* Find mode in dynamic list */
+    for (UInt32 i = 0; i < fModeCount; i++) {
+        if (fModes[i].valid && fModes[i].modeID == displayMode) {
+            *info = fModes[i].info;
+            FBLog("getInformationForDisplayMode: mode=%u -> %ux%u @ %uHz",
+                  displayMode,
+                  (uint32_t)info->nominalWidth, (uint32_t)info->nominalHeight,
+                  (uint32_t)(info->refreshRate >> 16));
+            return kIOReturnSuccess;
+        }
+    }
 
-    FBLog("getInformationForDisplayMode: %ux%u @ %uHz",
-          (uint32_t)info->nominalWidth, (uint32_t)info->nominalHeight,
-          (uint32_t)info->refreshRate);
-    return kIOReturnSuccess;
+    /* Fallback to default mode */
+    if (displayMode == MYFB_DEFAULT_MODE_ID && fModeCount > 0) {
+        *info = fModes[0].info;
+        return kIOReturnSuccess;
+    }
+
+    FBLog("getInformationForDisplayMode: mode=%u not found", (uint32_t)displayMode);
+    return kIOReturnUnsupportedMode;
 }
 
 IOReturn MyIntelFramebuffer::getPixelInformation(
@@ -343,27 +377,23 @@ IOReturn MyIntelFramebuffer::getPixelInformation(
     FBLog("getPixelInformation(mode=%u depth=%lu aperture=%lu)",
           (uint32_t)displayMode, (long)depth, (long)aperture);
     if (!pixelInfo) return kIOReturnBadArgument;
-    if (displayMode != MYFB_DISPLAY_MODE_ID)
-        return kIOReturnUnsupportedMode;
 
-    bzero(pixelInfo, sizeof(IOPixelInformation));
+    /* Find mode in dynamic list */
+    for (UInt32 i = 0; i < fModeCount; i++) {
+        if (fModes[i].valid && fModes[i].modeID == displayMode) {
+            *pixelInfo = fModes[i].pixelInfo;
+            return kIOReturnSuccess;
+        }
+    }
 
-    pixelInfo->pixelType        = kIORGBDirectPixels;
-    pixelInfo->componentCount   = 3;
-    pixelInfo->bitsPerPixel     = MYFB_BITS_PER_PIXEL;
-    pixelInfo->bytesPerRow      = MYFB_BYTES_PER_ROW;
-    pixelInfo->bytesPerPlane    = 0;
-    pixelInfo->bitsPerComponent = MYFB_BITS_PER_COMP;
-    pixelInfo->componentMasks[0] = 0x00FF0000;
-    pixelInfo->componentMasks[1] = 0x0000FF00;
-    pixelInfo->componentMasks[2] = 0x000000FF;
-    pixelInfo->componentMasks[3] = 0xFF000000;
-    pixelInfo->flags            = 0;
-    strlcpy(pixelInfo->pixelFormat, IO32BitDirectPixels, sizeof(pixelInfo->pixelFormat));
-    pixelInfo->activeWidth  = MYFB_H_ACTIVE;
-    pixelInfo->activeHeight = MYFB_V_ACTIVE;
+    /* Fallback to default mode */
+    if (displayMode == MYFB_DEFAULT_MODE_ID && fModeCount > 0) {
+        *pixelInfo = fModes[0].pixelInfo;
+        return kIOReturnSuccess;
+    }
 
-    return kIOReturnSuccess;
+    FBLog("getPixelInformation: mode=%u not found", (uint32_t)displayMode);
+    return kIOReturnUnsupportedMode;
 }
 
 UInt64 MyIntelFramebuffer::getPixelFormatsForDisplayMode(
@@ -380,15 +410,24 @@ UInt64 MyIntelFramebuffer::getPixelFormatsForDisplayMode(
 
 UInt32 MyIntelFramebuffer::getDisplayModeCount(void)
 {
-    FBLog("getDisplayModeCount -> %u", (uint32_t)MYFB_MODE_COUNT);
-    return MYFB_MODE_COUNT;
+    FBLog("getDisplayModeCount -> %u", (uint32_t)fModeCount);
+    return (fModeCount > 0) ? fModeCount : 1;
 }
 
 IOReturn MyIntelFramebuffer::getDisplayModes(IODisplayModeID *allDisplayModes)
 {
-    FBLog("getDisplayModes called");
+    FBLog("getDisplayModes called -> %u modes", (uint32_t)fModeCount);
     if (!allDisplayModes) return kIOReturnBadArgument;
-    allDisplayModes[0] = MYFB_DISPLAY_MODE_ID;
+
+    if (fModeCount > 0) {
+        for (UInt32 i = 0; i < fModeCount; i++) {
+            if (fModes[i].valid) {
+                allDisplayModes[i] = fModes[i].modeID;
+            }
+        }
+    } else {
+        allDisplayModes[0] = MYFB_DEFAULT_MODE_ID;
+    }
     return kIOReturnSuccess;
 }
 
@@ -409,8 +448,18 @@ IOReturn MyIntelFramebuffer::setDisplayMode(
         IOIndex depth)
 {
     FBLog("setDisplayMode: mode=%u depth=%lu", (uint32_t)displayMode, (long)depth);
-    if (displayMode != MYFB_DISPLAY_MODE_ID)
+
+    /* Check if mode is in our dynamic list */
+    bool modeValid = false;
+    for (UInt32 i = 0; i < fModeCount; i++) {
+        if (fModes[i].valid && fModes[i].modeID == displayMode) {
+            modeValid = true;
+            break;
+        }
+    }
+    if (!modeValid && displayMode != MYFB_DEFAULT_MODE_ID) {
         return kIOReturnUnsupportedMode;
+    }
     if (fCurrentModeID == displayMode && fCurrentDepth == depth)
         return kIOReturnSuccess;
 
@@ -629,7 +678,7 @@ void MyIntelFramebuffer::dumpDiagnostics(void) const
 
 void MyIntelFramebuffer::setupDefaultMode(void)
 {
-    fCurrentModeID = MYFB_DISPLAY_MODE_ID;
+    fCurrentModeID = MYFB_DEFAULT_MODE_ID;
     fCurrentDepth  = 0;
 }
 
@@ -827,7 +876,7 @@ IOReturn MyIntelFramebuffer::getStartupDisplayMode(
         IOIndex *depth)
 {
     if (!displayMode || !depth) return kIOReturnBadArgument;
-    *displayMode = MYFB_DISPLAY_MODE_ID;
+    *displayMode = MYFB_DEFAULT_MODE_ID;
     *depth = fCurrentDepth;
     FBLog("getStartupDisplayMode -> mode %u depth %lu", (unsigned int)*displayMode, (long)*depth);
     return kIOReturnSuccess;
@@ -838,10 +887,25 @@ IOReturn MyIntelFramebuffer::getTimingInfoForDisplayMode(
         IOTimingInformation *info)
 {
     if (!info) return kIOReturnBadArgument;
-    if (displayMode != MYFB_DISPLAY_MODE_ID) return kIOReturnUnsupportedMode;
+
+    /* Check if mode is in our dynamic list */
+    bool modeValid = false;
+    for (UInt32 i = 0; i < fModeCount; i++) {
+        if (fModes[i].valid && fModes[i].modeID == displayMode) {
+            modeValid = true;
+            break;
+        }
+    }
+    if (!modeValid && displayMode != MYFB_DEFAULT_MODE_ID) {
+        return kIOReturnUnsupportedMode;
+    }
+
     bzero(info, sizeof(*info));
     info->appleTimingID = kIOTimingIDInvalid;
-    info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+    info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag;
+    if (displayMode == MYFB_DEFAULT_MODE_ID) {
+        info->flags |= kDisplayModeDefaultFlag;
+    }
     FBLog("getTimingInfoForDisplayMode mode %u -> timing valid", (unsigned int)displayMode);
     return kIOReturnSuccess;
 }
@@ -860,5 +924,196 @@ IOReturn MyIntelFramebuffer::connectFlags(
 
     *flags = kIOConnectionBuiltIn;
     FBLog("connectFlags -> 0x%X (built-in eDP)", (unsigned int)*flags);
+    return kIOReturnSuccess;
+}
+
+#pragma mark - Phase 8: Dynamic EDID/Mode Support
+
+bool MyIntelFramebuffer::detectAndParseEDID(void)
+{
+    FBLog("detectAndParseEDID: START");
+
+    if (!fGPU) {
+        FBLog("detectAndParseEDID: No GPU parent");
+        return false;
+    }
+
+    /* Create EDID parser */
+    fEDIDParser = new MyIntelEDIDParser;
+    if (!fEDIDParser) {
+        FBLog("detectAndParseEDID: Failed to allocate EDID parser");
+        return false;
+    }
+
+    if (!fEDIDParser->init()) {
+        FBLog("detectAndParseEDID: EDID parser init failed");
+        fEDIDParser->release();
+        fEDIDParser = NULL;
+        return false;
+    }
+
+    /* Read EDID via DDC (block 0) */
+    UInt8 edidBuf[128];
+    IOByteCount edidLen = 128;
+    IOReturn err = getDDCBlock(0, 0, 0, 0, edidBuf, &edidLen);
+
+    if (err != kIOReturnSuccess || edidLen < 128) {
+        FBLog("detectAndParseEDID: DDC read failed (err=0x%X, len=%lu), using hardcoded",
+              (unsigned int)err, (unsigned long)edidLen);
+        /* Use hardcoded KDB0924 EDID as fallback */
+        bcopy(gKDB0924_EDID, edidBuf, 128);
+        edidLen = 128;
+    }
+
+    /* Parse EDID */
+    if (!fEDIDParser->parse(edidBuf, edidLen)) {
+        FBLog("detectAndParseEDID: EDID parse failed");
+        fEDIDParser->release();
+        fEDIDParser = NULL;
+        return false;
+    }
+
+    fEDIDParser->dumpParsedEDID();
+    fEDIDParsed = true;
+
+    FBLog("detectAndParseEDID: SUCCESS - %u detailed timings",
+          fEDIDParser->getDetailedTimingCount());
+    return true;
+}
+
+void MyIntelFramebuffer::buildModeListFromEDID(void)
+{
+    FBLog("buildModeListFromEDID: START");
+
+    if (!fEDIDParsed || !fEDIDParser) {
+        FBLog("buildModeListFromEDID: EDID not parsed, using default mode");
+        initModeFromTiming(0, NULL);
+        fModeCount = 1;
+        return;
+    }
+
+    UInt32 timingCount = fEDIDParser->getDetailedTimingCount();
+    if (timingCount == 0) {
+        FBLog("buildModeListFromEDID: No detailed timings, using default");
+        initModeFromTiming(0, NULL);
+        fModeCount = 1;
+        return;
+    }
+
+    UInt32 modeID = MYFB_DEFAULT_MODE_ID;
+    for (UInt32 i = 0; i < timingCount && i < MYFB_MAX_MODES; i++) {
+        MyIntelEDIDParser::DetailedTiming t;
+        UInt32 pclk;
+        UInt16 hAct, hBlk, vAct, vBlk;
+        UInt8 hOff, hWid, vOff, vWid, flg, stereo;
+
+        if (fEDIDParser->getDetailedTiming(i, &pclk, &hAct, &hBlk, &vAct, &vBlk,
+                                          &hOff, &hWid, &vOff, &vWid, &flg, &stereo)) {
+            t.pixelClock = pclk;
+            t.hActive = hAct;
+            t.hBlank = hBlk;
+            t.vActive = vAct;
+            t.vBlank = vBlk;
+            t.hSyncOffset = hOff;
+            t.hSyncWidth = hWid;
+            t.vSyncOffset = vOff;
+            t.vSyncWidth = vWid;
+            t.flags = flg;
+            t.stereo = stereo;
+
+            initModeFromTiming(modeID, &t);
+            fModes[i].modeID = modeID;
+            fModes[i].valid = true;
+            modeID++;
+        }
+    }
+
+    fModeCount = (modeID > MYFB_DEFAULT_MODE_ID) ? (modeID - MYFB_DEFAULT_MODE_ID) : 1;
+    FBLog("buildModeListFromEDID: Built %u modes", fModeCount);
+}
+
+void MyIntelFramebuffer::initModeFromTiming(UInt32 index, const MyIntelEDIDParser::DetailedTiming *t)
+{
+    DisplayMode *mode = &fModes[index];
+    if (!mode) return;
+
+    IODisplayModeInformation *info = &mode->info;
+    IOPixelInformation *pixInfo = &mode->pixelInfo;
+
+    bzero(info, sizeof(IODisplayModeInformation));
+    bzero(pixInfo, sizeof(IOPixelInformation));
+
+    if (t) {
+        /* Use parsed EDID timing */
+        info->nominalWidth = t->hActive;
+        info->nominalHeight = t->vActive;
+        info->refreshRate = ((t->pixelClock * 1000ULL) << 16) /
+                            ((t->hActive + t->hBlank) * (t->vActive + t->vBlank));
+        info->maxDepthIndex = 0;
+        info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag;
+        if (index == 0) info->flags |= kDisplayModeDefaultFlag;
+
+        pixInfo->pixelType = kIORGBDirectPixels;
+        pixInfo->componentCount = 3;
+        pixInfo->bitsPerPixel = MYFB_BITS_PER_PIXEL;
+        pixInfo->bytesPerRow = t->hActive * MYFB_BYTES_PER_PIXEL;
+        pixInfo->bytesPerPlane = 0;
+        pixInfo->bitsPerComponent = MYFB_BITS_PER_COMP;
+        pixInfo->componentMasks[0] = 0x00FF0000;
+        pixInfo->componentMasks[1] = 0x0000FF00;
+        pixInfo->componentMasks[2] = 0x000000FF;
+        pixInfo->componentMasks[3] = 0xFF000000;
+        pixInfo->flags = 0;
+        strlcpy(pixInfo->pixelFormat, IO32BitDirectPixels, sizeof(pixInfo->pixelFormat));
+        pixInfo->activeWidth = t->hActive;
+        pixInfo->activeHeight = t->vActive;
+
+        FBLog("initModeFromTiming[%u]: %ux%u @ %u Hz (pclk=%u kHz)",
+              index, t->hActive, t->vActive,
+              (uint32_t)(info->refreshRate >> 16), t->pixelClock);
+    } else {
+        /* Fallback to hardcoded 1920x1080@60 */
+        info->nominalWidth = MYFB_DEFAULT_H_ACTIVE;
+        info->nominalHeight = MYFB_DEFAULT_V_ACTIVE;
+        info->refreshRate = MYFB_DEFAULT_REFRESH << 16;
+        info->maxDepthIndex = 0;
+        info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+
+        pixInfo->pixelType = kIORGBDirectPixels;
+        pixInfo->componentCount = 3;
+        pixInfo->bitsPerPixel = MYFB_BITS_PER_PIXEL;
+        pixInfo->bytesPerRow = MYFB_DEFAULT_H_ACTIVE * MYFB_BYTES_PER_PIXEL;
+        pixInfo->bytesPerPlane = 0;
+        pixInfo->bitsPerComponent = MYFB_BITS_PER_COMP;
+        pixInfo->componentMasks[0] = 0x00FF0000;
+        pixInfo->componentMasks[1] = 0x0000FF00;
+        pixInfo->componentMasks[2] = 0x000000FF;
+        pixInfo->componentMasks[3] = 0xFF000000;
+        pixInfo->flags = 0;
+        strlcpy(pixInfo->pixelFormat, IO32BitDirectPixels, sizeof(pixInfo->pixelFormat));
+        pixInfo->activeWidth = MYFB_DEFAULT_H_ACTIVE;
+        pixInfo->activeHeight = MYFB_DEFAULT_V_ACTIVE;
+
+        FBLog("initModeFromTiming[%u]: DEFAULT 1920x1080@60", index);
+    }
+}
+
+IOReturn MyIntelFramebuffer::getModeInfoForIndex(UInt32 index, IODisplayModeInformation *info) const
+{
+    if (!info || index >= fModeCount) return kIOReturnBadArgument;
+    if (!fModes[index].valid) return kIOReturnUnsupportedMode;
+    *info = fModes[index].info;
+    return kIOReturnSuccess;
+}
+
+IOReturn MyIntelFramebuffer::getPixelInfoForIndex(UInt32 index, IOIndex depth,
+                                                   IOPixelAperture aperture,
+                                                   IOPixelInformation *pixelInfo) const
+{
+    (void)depth;
+    (void)aperture;
+    if (!pixelInfo || index >= fModeCount) return kIOReturnBadArgument;
+    if (!fModes[index].valid) return kIOReturnUnsupportedMode;
+    *pixelInfo = fModes[index].pixelInfo;
     return kIOReturnSuccess;
 }

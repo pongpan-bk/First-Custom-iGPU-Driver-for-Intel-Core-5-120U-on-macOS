@@ -9,10 +9,9 @@
 
 #include "MyIntelAccelerator.hpp"
 #include "MyIntelGPU.hpp"
-#include "MyIntelObfuscate.h"
+
 #include "MyIntelRing.hpp"
 #include <IOKit/IOLib.h>
-#include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include <string.h>
@@ -20,21 +19,10 @@
 #define AccelDebug(fmt, ...) \
     do { IOLog("MyIntelAccelerator: [%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__); } while(0)
 
-/* IOCFPlugInTypes UUID used by IOAccelerator2D.plugin consumers
- * (same as AppleIntelICLGraphics.kext personality). */
-#define kMyIntelAccelCFPlugInUUID  "ACCF0000-0000-0000-0000-000a2789904e"
-#define kMyIntelAccelCFPlugInName  "IOAccelerator2D.plugin"
+
 
 #define super IOAccelerator
 OSDefineMetaClassAndStructors(MyIntelAccelerator, IOAccelerator)
-
-/* ── Path B: Metal device/shared client bound (2026-09-18, v3.1.30) ──────────
- * type 5/6 = Metal IOAccel device/shared contract probed by WindowServer/Metal.
- * Module-static counter bounds concurrent type-5/6 clients so a WindowServer
- * crash + reopen flood cannot cascade "Too many corpses being created"
- * (root cause of the 2026-09-17 crash-loop — see newUserClient rationale). */
-static SInt32 gMetalClientCount = 0;
-static const SInt32 kMaxConcurrentMetalClients = 2;
 
 #pragma mark - MyIntelAccelerator
 
@@ -152,65 +140,10 @@ IOReturn MyIntelAccelerator::newUserClient(task_t resettingTask, void *securityI
         return kIOReturnSuccess;
     }
 
-    /* 2026-09-18 PATH B (v3.1.30): Metal IOAccel device/shared contract — DEFAULT ON.
-     * WindowServer/Metal probes the accelerator with newUserClient type 0x5
-     * (device) and 0x6 (shared) to run the IOAccelDeviceCreateWithAPIProperty
-     * handshake. MyIntelAccelClient::externalMethod already implements the
-     * type-5 selector set (9/2/10 + default-ok, exercised in M2C discovery),
-     * but this gate rejected the client outright, so Metal activation could
-     * never begin — this is the single blocking point for that path.
-     * Rationale (Bugfix Rule — why this is safe as default-ON):
-     *  1. 0x5/0x6 เป็นสัญญาเปิดของ Metal/WindowServer ต้อง default-on ทุก boot —
-     *     ไม่ควรอยู่หลัง myintelpassthru boot-arg (default-off experiment).
-     *  2. ผูก bound ด้วย counter (kMaxConcurrentMetalClients=2) กัน flood แบบ
-     *     2026-09-17 ("Too many corpses being created" จาก unbounded fake-client
-     *     creation) — เกิน bound -> kIOReturnExclusiveAccess (reject มีขอบเขต,
-     *     ไม่สร้าง client มั่วซ้ำ).
-     *  3. นอก types เหล่านี้ behavior ไม่เปลี่ยน — คีย์แปลกปลอมยัง REJECT เหมือนเดิม. */
-    if (type == 5 || type == 6) {
-        if (OSIncrementAtomic(&gMetalClientCount) > kMaxConcurrentMetalClients) {
-            OSDecrementAtomic(&gMetalClientCount);
-            AccelDebug("newUserClient: metal client count > %d — EXCLUSIVE (bounded reject)",
-                       (int)kMaxConcurrentMetalClients);
-            return kIOReturnExclusiveAccess;
-        }
-        MyIntelAccelClient *client = new MyIntelAccelClient;
-        if (!client) {
-            OSDecrementAtomic(&gMetalClientCount);
-            return kIOReturnNoMemory;
-        }
-        if (!client->initWithTask(resettingTask, securityID, type, properties)) {
-            client->release();
-            OSDecrementAtomic(&gMetalClientCount);
-            return kIOReturnError;
-        }
-        if (!client->attach(this)) {
-            client->release();
-            OSDecrementAtomic(&gMetalClientCount);
-            return kIOReturnError;
-        }
-        if (!client->start(this)) {
-            client->detach(this);
-            client->release();
-            OSDecrementAtomic(&gMetalClientCount);
-            return kIOReturnError;
-        }
-        *handler = client;
-        AccelDebug("newUserClient: METAL client type=0x%X created (task %p)",
-                   (unsigned int)type, resettingTask);
-        return kIOReturnSuccess;
-    }
-
-    /* 🚨 ท่อพักสายชั่วคราว (Pass-through Test) — GATED by boot-arg myintelpassthru=1.
-     *
-     * CRASH ROOT CAUSE (2026-09-17): WindowServer probes the accelerator with
-     * newUserClient type 0x5/0x6 in a tight flood. Unbounded fake-client creation
-     * here triggered "Too many corpses being created" cascade (WindowServer/Finder
-     * crash-loop at 20:04/20:06/20:47) -> reboot. DEFAULT = clean reject so default
-     * boots are stable; the experiment stays available behind the boot-arg. */
-    char ptArg[8];
-    bool ptEnabled = (PE_parse_boot_argn("myintelpassthru", ptArg, sizeof(ptArg)) && ptArg[0] == '1');
-    if (ptEnabled && type >= 0 && type <= 0x30) {
+    /* 🚨 ท่อพักสายชั่วคราว (Pass-through Test): ถ้า WindowServer ยิง Type อื่น (เช่น 0, 1, 2) มาขอเปิดคลาส 
+     * เราจะแกล้งทำเป็นยอมรับ เพื่อหลอกไม่ให้ WindowServer ปฏิเสธการทำงานและสั่งเด้งกลับไปใช้ CPU 
+     * รอดูหน้างานสดๆ เลยว่าอาการหน่วงแล็กส้นตีนตอนย่อแอปจะหายไปหรือไม่ */
+    if (type >= 0 && type <= 0x30) {
         MyIntelAccelClient *testClient = new MyIntelAccelClient;
         if (testClient) {
             if (testClient->initWithTask(resettingTask, securityID, type, properties) &&
@@ -239,13 +172,6 @@ bool MyIntelAccelerator::publishProperties(void)
     /* IOAccelIndex — standard accelerator ordinal */
     setProperty("IOAccelIndex", 0ULL, 32);
 
-    /* 2026-09-17 NATIVE ACCELERATOR MARKERS (user directive + Apple vocab):
-     * "IOAccelerator"=true + "IOAcceleratorType"="GPU" — the same markers
-     * AGX/AppleParavirtGPU publish so WindowServer/Metal classify this node
-     * as a GPU accelerator instead of a plain IOService. */
-    setProperty("IOAccelerator", kOSBooleanTrue);
-    setProperty("IOAcceleratorType", "GPU");
-
     /* IOSourceVersion — 6-byte OSData (SP reads it) */
     {
         uint8_t srcVer[6] = { 0, 0, 0, 0, 0, 0 };
@@ -272,19 +198,7 @@ bool MyIntelAccelerator::publishProperties(void)
         }
     }
 
-    /* IOCFPlugInTypes — legacy 2D-plugin discovery UUID */
-    {
-        OSDictionary *plug = OSDictionary::withCapacity(1);
-        if (plug) {
-            OSString *name = OSString::withCString(kMyIntelAccelCFPlugInName);
-            if (name) {
-                plug->setObject(kMyIntelAccelCFPlugInUUID, name);
-                name->release();
-            }
-            setProperty("IOCFPlugInTypes", plug);
-            plug->release();
-        }
-    }
+
 
     /* PerformanceStatistics — telemetry surface for SP/AGPM/WindowServer.
      * Adding "Counter" (monotonic uint64) + "GPUActivityInPercent" (0..100)
@@ -322,32 +236,15 @@ bool MyIntelAccelerator::publishProperties(void)
      *  IOGVA*Decode/Encode = "1" means HW codec available            */
     r = setProperty("IOGVACodec",      "Gen12HP");          AccelDebug("  IOGVACodec=%d", (int)r);
     r = setProperty("IOVARendererID",  (uint64_t)0x1080100, 32); AccelDebug("  IOVARendererID=%d", (int)r);
-    /* 2026-09-17 REAL ICL VOCAB (from /System/Library/Extensions/AppleIntelICLGraphics.kext
-     * Gen7 personality): AppleGVA discovers the HW codec via IOGVAXDecode (integer,
-     * 2 = Gen12 decode enabled) and loads the VA user-space bundle via IODVDBundleName.
-     * Both replace the earlier string-based guesses; kept parallel so old clients
-     * that read IOGVAH264Decode still see a codec. */
-    r = setProperty("IOGVAXDecode",    (uint64_t)2, 32);    AccelDebug("  IOGVAXDecode=%d", (int)r);
-    r = setProperty("IODVDBundleName", "AppleIntelICLGraphicsVADriver"); AccelDebug("  IODVDBundle=%d (Apple Intel ICL VA)", (int)r);
     r = setProperty("IOGVAH264Decode", "1");                AccelDebug("  IOGVAH264Decode=%d", (int)r);
     r = setProperty("IOGVAH264Encode", "1");                AccelDebug("  IOGVAH264Encode=%d", (int)r);
     r = setProperty("IOGVAHEVCDecode", "1");                AccelDebug("  IOGVAHEVCDecode=%d", (int)r);
     r = setProperty("IOGVAHEVCEncode", "1");                AccelDebug("  IOGVAHEVCEncode=%d", (int)r);
     r = setProperty("IOGVA_AV1Decode", "1");                AccelDebug("  IOGVA_AV1Decode=%d", (int)r);
     r = setProperty("IOGVP9Decode",    "1");                AccelDebug("  IOGVP9Decode=%d", (int)r);
-         /* 2026-09-17 APPLE NATIVE BUNDLE DIRECTIVE (user): point at the Apple
-     * ICL (Ice Lake) GL + Metal driver bundles that macOS ships in SLE:
-     *   IOGLBundleName = "AppleIntelICLGraphicsGLDriver"   (exists: AppleIntelICLGraphicsGLDriver.bundle)
-     *   MetalPluginName = "AppleIntelICLGraphicsMTLDriver" (exists: AppleIntelICLGraphicsMTLDriver.bundle)
-     * MetalPluginClassName is NOT set — Apple's own Intel kexts rely on the
-     * bundle's NSPrincipalClass (MTLIGAccelDevice); libigdmd.dylib (the core
-     * of the MTL bundle) links IOAccelerator.framework, not IOGPU, so it talks
-     * to the kernel through the IOAccelerator user-client contract that this
-     * class already implements (type-5 M2C probe: sel=2 caps / sel=9 apiName).
-     * Our kext stays the kernel-side middleman (native driver); Apple's
-     * bundles supply the Metal/GL userspace.  */
-    r = setProperty("MetalStatisticsName", "Intel(R) Iris(R) Xe Graphics"); AccelDebug("  MetalStats=%d", (int)r);
-    /* Gen9 plugin binding removed — AppleIntelKBLGraphics* bundles don't exist on Gen12 */
+
+
+    AccelDebug("publishProperties: GVA done");
 
 
     return ok;
@@ -392,12 +289,6 @@ bool MyIntelAccelClient::start(IOService *provider)
 
 IOReturn MyIntelAccelClient::clientClose(void)
 {
-    /* Path B (v3.1.30): release the bounded type-5/6 slot claimed in
-     * newUserClient so a closed Metal client frees capacity for the next
-     * WindowServer session instead of leaking toward the exclusive bound. */
-    if (fClientType == 5 || fClientType == 6) {
-        OSDecrementAtomic(&gMetalClientCount);
-    }
     if (fDirtyRingMap) { fDirtyRingMap->release(); fDirtyRingMap = NULL; }
     if (fDirtyRingMD) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; }
     fDirtyRingUserVA = 0;
@@ -418,6 +309,7 @@ IOReturn MyIntelAccelClient::clientClose(void)
  * NOTE: live lldb regs show structOut=rbp-0x280 (&outSize var at rbp-0x2b0);
  * dlsym reads rbp-0x268 = structOut+0x18 (NOT +0x48 — off-by-0x30 bug, fixed).
  */
+
 static char gMyAccelName[64] = "IOAccelSharedGetConnect";  // default export candidate
 static bool gMyAccelNameInit = false;
 
@@ -444,56 +336,14 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
     if (fClientType == 5) {
         myAccelNameInitOnce();
         switch (selector) {
-        case 9: { /* set API property name — 16B structIn e.g. "Metal\0..." */
-            AccelDebug("DISC M2C sel=9 apiName stIn=%lu stOut=%lu",
-                       (unsigned long)arguments->structureInputSize,
-                       (unsigned long)arguments->structureOutputSize);
-            return kIOReturnSuccess;
-        }
-        case 2: { /* get device caps — 600B structOut (IOAccelDeviceCreateWithAPIProperty) */
-            if (!arguments->structureOutput || arguments->structureOutputSize < 600)
-                return kIOReturnBadArgument;
-            uint8_t *caps = (uint8_t *)arguments->structureOutput;
-            bzero(caps, arguments->structureOutputSize);
-            strlcpy((char *)(caps + 0x18), gMyAccelName, 64);
-            AccelDebug("DISC M2C sel=2 caps 600B name=%s", gMyAccelName);
-            return kIOReturnSuccess;
-        }
-        case 10: { /* WindowServer dirtyRing 24B — non-Metal path */
-            if (!arguments->structureOutput || arguments->structureOutputSize < 24)
-                return kIOReturnBadArgument;
-            if (!fDirtyRingMD) {
-                fDirtyRingMD = IOBufferMemoryDescriptor::withOptions(kIODirectionInOut | kIOMemoryBufferPageable, 4096, PAGE_SIZE);
-                if (!fDirtyRingMD) return kIOReturnNoMemory;
-                if (fDirtyRingMD->prepare() != kIOReturnSuccess) { fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
-                fDirtyRingMap = fDirtyRingMD->createMappingInTask(fClientTask, 0, kIOMapAnywhere);
-                if (!fDirtyRingMap) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
-                fDirtyRingUserVA = fDirtyRingMap->getVirtualAddress();
-                IOMemoryMap *kernMap = fDirtyRingMD->map(kIOMapInhibitCache);
-                if (kernMap) {
-                    void *kernVA = (void *)kernMap->getVirtualAddress();
-                    bzero(kernVA, 4096);
-                    *(uint32_t*)((uint8_t*)kernVA + 4) = 64;
-                    kernMap->release();
-                }
-                IOLog("MyIntelAccelerator::[dirtyRing] allocated userVA=0x%llx cap=64 (type5)\n", fDirtyRingUserVA);
-            }
-            uint64_t *out = (uint64_t *)arguments->structureOutput;
-            out[0] = fDirtyRingUserVA;
-            out[1] = 0;
-            out[2] = 0;
-            arguments->structureOutputSize = 24;
-            IOLog("MyIntelAccelerator::[dirtyRing] type5 sel10 return va=0x%llx 24B\n", fDirtyRingUserVA);
-            return kIOReturnSuccess;
-        }
         default:
-            AccelDebug("DISC M2C sel=%u in=%u out=%u stIn=%lu stOut=%lu -> SUCCESS",
+            AccelDebug("DISC M2C sel=%u in=%u out=%u stIn=%lu stOut=%lu -> REJECTED (Metal functionality removed)",
                        (unsigned int)selector,
                        (unsigned int)arguments->scalarInputCount,
                        (unsigned int)arguments->scalarOutputCount,
                        (unsigned long)arguments->structureInputSize,
                        (unsigned long)arguments->structureOutputSize);
-            return kIOReturnSuccess;
+            return kIOReturnUnsupported;
         }
     }
 
@@ -512,7 +362,7 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
         const uint8_t *discP = (const uint8_t *)arguments->structureInput;
         uint32_t discN = (uint32_t)(arguments->structureInputSize < 16 ?
                                     arguments->structureInputSize : 16);
-        char discHex[3 * 16 + 1];
+        char discHex[3 * 16];
         uint32_t discPos = 0;
         for (uint32_t discI = 0; discI < discN; discI++) {
             discHex[discPos++] = "0123456789ABCDEF"[discP[discI] >> 4];
@@ -710,7 +560,7 @@ IOReturn MyIntelAccelClient::sGetInfo(MyIntelAccelClient *client,
     }
 
     MyIntelAccelInfo info = {};
-  info.accelID       = static_cast<uint32_t>(client->fAccel->getAccelID());
+    info.accelID       = client->fAccel->getAccelID();
 
     MyIntelGPU *gpu = client->fAccel->getGPU();
     if (gpu) {

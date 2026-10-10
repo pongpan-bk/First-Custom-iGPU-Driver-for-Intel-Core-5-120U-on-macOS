@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.1.2</string>
+	<string>3.1.26</string>
 	<key>CFBundleVersion</key>
-	<string>3.1.27</string>
+	<string>3.1.26</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_GPU</key>
@@ -28,6 +28,8 @@
 			<string>MyIntelGPU</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xFFFF0000</string>
 			<key>IOPCIMatch</key>
 			<string>0xA7AC8086</string>
 			<key>IOProbeScore</key>
@@ -35,31 +37,35 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOVARendererID</key>
-			<data>AAAAAA==</data>
+			<data>
+			AAAAAA==
+			</data>
 			<key>Universal_AutoMatch_MetalStatistics</key>
 			<string>Intel (R) Iris (R) Xe Graphics</string>
 			<key>model</key>
 			<string>Intel Iris Xe 80EU</string>
 		</dict>
 	</dict>
+	<key>MinKernel</key>
+	<string>19.0.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
 	<key>OSBundleLibraries</key>
 	<dict>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>597</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
-		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>500.0</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>10.0.0</string>
+		<string>22.6.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>10.0.0</string>
+		<string>22.6.0</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>10.0.0</string>
+		<string>22.6.0</string>
 		<key>com.apple.kpi.mach</key>
-		<string>10.0.0</string>
+		<string>22.6.0</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>22.6.0</string>
 	</dict>
-	<key>OSBundleRequired</key>
-	<string>Root</string>
 </dict>
 </plist>

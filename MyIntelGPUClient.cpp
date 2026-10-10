@@ -451,69 +451,6 @@ IOReturn MyIntelGPUClient::externalMethod(uint32_t selector, IOExternalMethodArg
             return kIOReturnSuccess;
         }
 
-        case 12: { // ExecBatch — i915 execbuffer equivalent.
-            //   in[0] = GEM handle holding a user-written command stream
-            //   in[1] = dword count (0 = whole buffer)
-            //   out[0] = seqno to pass to WaitBatch
-            // The kernel only maps + submits; it never synthesizes commands.
-            if (arguments->scalarInputCount < 1) return kIOReturnBadArgument;
-            if (arguments->scalarOutputCount < 1) return kIOReturnBadArgument;
-            if (!fProvider) return kIOReturnNotReady;
-
-            MyIntelGEMBuffer *buf = (MyIntelGEMBuffer *)arguments->scalarInput[0];
-            bool verified = false;
-            for (uint32_t i = 0; i < fBufferCount; i++) {
-                if (fBuffers[i] == buf) { verified = true; break; }
-            }
-            if (!verified) return kIOReturnBadArgument;
-            if (buf->magic != GEM_BUFFER_MAGIC) return kIOReturnBadArgument;
-
-            uint32_t dwords = (arguments->scalarInputCount >= 2)
-                           ? (uint32_t)arguments->scalarInput[1] : 0;
-            if (dwords == 0)
-                dwords = buf->size / 4;
-            if (dwords > (buf->size / 4)) return kIOReturnBadArgument;
-
-            /* The command stream must be visible to the GPU: push the CPU
-             * writes out before the ring reads the buffer. */
-            __builtin___clear_cache((char *)buf->cpuAddr,
-                                    (char *)buf->cpuAddr + (dwords * 4));
-
-            arguments->scalarOutput[0] = fProvider->submitUserBatch(buf, dwords);
-            return kIOReturnSuccess;
-        }
-
-        case 13: { // WaitBatch — fence wait on the GPU-written HWSP seqno.
-            //   in[0]  = seqno from ExecBatch
-            //   in[1]  = timeout ms (0 = non-blocking poll)
-            //   out[0] = 1 when retired
-            //   out[1] = completedSeqno as last seen by hardware
-            //   out[2] = pendingCount
-            if (arguments->scalarInputCount < 1) return kIOReturnBadArgument;
-            if (arguments->scalarOutputCount < 3) return kIOReturnBadArgument;
-            if (!fProvider) return kIOReturnNotReady;
-
-            uint32_t seqno    = (uint32_t)arguments->scalarInput[0];
-            uint32_t timeoutMs = (arguments->scalarInputCount >= 2)
-                               ? (uint32_t)arguments->scalarInput[1] : 0;
-            uint64_t done = 0, completed = 0, pending = 0;
-            fProvider->waitBatchCompletion(seqno, timeoutMs, &done, &completed, &pending);
-            arguments->scalarOutput[0] = done;
-            arguments->scalarOutput[1] = completed;
-            arguments->scalarOutput[2] = pending;
-            return kIOReturnSuccess;
-        }
-
-        case 14: { // RingStatus — live ring telemetry for duty-cycle math.
-            //   out[0] = head, out[1] = tail, out[2] = space
-            //   out[3] = pendingCount, out[4] = ring size bytes
-            //   out[5] = completedSeqno
-            if (arguments->scalarOutputCount < 6) return kIOReturnBadArgument;
-            if (!fProvider) return kIOReturnNotReady;
-            fProvider->readRingStatus(arguments->scalarOutput);
-            return kIOReturnSuccess;
-        }
-
         /* Phase B step-machine: incremental accelerator adoption */
         case 20: { // AccelStepAlloc: input[0]=attachMode(1=this,2=PCI)
             if (!fProvider) return kIOReturnNotReady;
@@ -544,6 +481,85 @@ IOReturn MyIntelGPUClient::externalMethod(uint32_t selector, IOExternalMethodArg
             if (!fProvider) return kIOReturnNotReady;
             if (arguments->scalarOutputCount < 1) return kIOReturnBadArgument;
             arguments->scalarOutput[0] = fProvider->accelBatchBlit() ? 1 : 0;
+            return kIOReturnSuccess;
+        }
+
+        /* Selector 12: ExecBatch — submit user batch buffer
+         * scalarInput[0] = batch GGTT offset
+         * scalarInput[1] = taskType (kMyIntelTaskTypeUserBatch)
+         * scalarInput[2] = packetData
+         */
+        case 12: {
+            if (arguments->scalarInputCount < 1 || arguments->scalarOutputCount < 1)
+                return kIOReturnBadArgument;
+            if (!fProvider) return kIOReturnNotReady;
+            
+            uint32_t batchGGTT = (uint32_t)arguments->scalarInput[0];
+            uint32_t taskType = kMyIntelTaskTypeUserBatch;
+            uint64_t packetData = 0;
+            
+            if (arguments->scalarInputCount >= 2)
+                taskType = (uint32_t)arguments->scalarInput[1];
+            if (arguments->scalarInputCount >= 3)
+                packetData = arguments->scalarInput[2];
+            
+            MyIntelRing *vcsRing = fProvider->getVCSRing();
+            kern_return_t kr = fProvider->submitUserBatch(vcsRing, batchGGTT, taskType, packetData);
+            arguments->scalarOutput[0] = (uint64_t)kr;
+            return kIOReturnSuccess;
+        }
+
+        /* Selector 13: WaitBatch — wait for batch completion
+         * scalarInput[0] = target seqno
+         * scalarInput[1] = timeoutMs (optional, default 300ms)
+         */
+        case 13: {
+            if (arguments->scalarInputCount < 1 || arguments->scalarOutputCount < 1)
+                return kIOReturnBadArgument;
+            if (!fProvider) return kIOReturnNotReady;
+            
+            uint32_t targetSeqno = (uint32_t)arguments->scalarInput[0];
+            uint32_t timeoutMs = 300;
+            if (arguments->scalarInputCount >= 2)
+                timeoutMs = (uint32_t)arguments->scalarInput[1];
+            
+            MyIntelRing *vcsRing = fProvider->getVCSRing();
+            kern_return_t kr = fProvider->waitBatchCompletion(vcsRing, targetSeqno, timeoutMs);
+            arguments->scalarOutput[0] = (uint64_t)kr;
+            return kIOReturnSuccess;
+        }
+
+        /* Selector 14: RingStatus — get ring telemetry
+         * scalarInput[0] = engine type (0=RCS, 1=BCS, 2=VCS)
+         * scalarOutput[0] = head
+         * scalarOutput[1] = tail
+         * scalarOutput[2] = space
+         * scalarOutput[3] = pending count
+         */
+        case 14: {
+            if (arguments->scalarInputCount < 1 || arguments->scalarOutputCount < 4)
+                return kIOReturnBadArgument;
+            if (!fProvider) return kIOReturnNotReady;
+            
+            uint32_t engineType = (uint32_t)arguments->scalarInput[0];
+            MyIntelRing *ring = NULL;
+            
+            switch (engineType) {
+                case 0: ring = fProvider->getRingRCS(); break;
+                case 1: ring = fProvider->getRingBCS(); break;
+                case 2: ring = fProvider->getVCSRing(); break;
+                default: return kIOReturnBadArgument;
+            }
+            
+            uint32_t head = 0, tail = 0, space = 0, pending = 0;
+            kern_return_t kr = fProvider->readRingStatus(ring, &head, &tail, &space, &pending);
+            
+            if (kr == kIOReturnSuccess) {
+                arguments->scalarOutput[0] = (uint64_t)head;
+                arguments->scalarOutput[1] = (uint64_t)tail;
+                arguments->scalarOutput[2] = (uint64_t)space;
+                arguments->scalarOutput[3] = (uint64_t)pending;
+            }
             return kIOReturnSuccess;
         }
 

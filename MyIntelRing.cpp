@@ -16,29 +16,6 @@
 
 #include "MyIntelRing.hpp"
 #include <IOKit/IOLib.h>
-/*===========================================================================
- *  MyIntelRing.cpp
- *  Hackintosh Kext — Ring Buffer Engine (Phase 5)
- *
- *  Implementation:
- *    1. ringCreate — alloc GEM buffer + program engine registers
- *    2. ringBegin / ringAdvance — command emission
- *    3. ringSubmit — RING_TAIL write = kick GPU
- *    4. ringEmit* — MI command helpers
- *
- *  References:
- *    - Linux i915: intel_ring_submission.c xcs_resume()
- *                  intel_ring.h intel_ring_begin/advance
- *    - i915_reg.h: RING_TAIL, RING_HEAD, RING_START, RING_CTL
- *///=========================================================================
-
-#include "MyIntelRing.hpp"
-#include <IOKit/IOLib.h>
-
-// ─── วางโค้ดแก้บั๊กพอยเตอร์ตรงนี้ ───
-#undef CONTEXT_STATUS_PTR_RESET
-#define CONTEXT_STATUS_PTR_RESET 0x00000000u
-
 
 /*
  * ─────────────────────────────────────────────
@@ -451,7 +428,7 @@ MyIntelRing *ringCreate(
             }
             ring->lrcInited = true;
         } else {
-            RING_DEBUG_RAW("LRC size: %llu pages", LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
+            RING_DEBUG_RAW("ringCreate: WARNING — LRC image build failed, using legacy submit");
         }
     } else {
         RING_DEBUG_RAW("ringCreate: WARNING — LRC alloc failed, using legacy submit");
@@ -1595,10 +1572,11 @@ bool ringEmitRaw(MyIntelRing *ring, const uint32_t *cmds, uint32_t dwords)
  */
 
 uint32_t emitBcsBlitCopy(uint32_t *dst, uint32_t dstAddr,
-                         uint32_t srcAddr, uint32_t bytes)
+                          uint32_t srcAddr, uint32_t bytes)
 {
     if (!dst || (bytes & (PAGE_SIZE - 1)) != 0 || bytes == 0) return 0;
     if ((dstAddr & (PAGE_SIZE - 1)) != 0 || (srcAddr & (PAGE_SIZE - 1)) != 0) return 0;
+    if (dstAddr == 0 || srcAddr == 0) return 0;  /* Guard against NULL GGTT offset */
 
     /* i915 emit_copy (intel_migrate.c:591-599), instance = 0 */
     uint32_t height = bytes >> PAGE_SHIFT;
