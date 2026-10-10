@@ -76,7 +76,6 @@ enum {
     kMyIntelTaskTypeMiMath,           /* RCS MI_MATH(4) GPR ALU proof */
     kMyIntelTaskTypePipeControl,      /* RCS PIPE_CONTROL flush proof */
     kMyIntelTaskTypeBreadcrumb,       /* RCS Hardware Breadcrumb Seqno write */
-    kMyIntelTaskTypeUserBatch,        /* User batch buffer (ExecBatch selector 12) */
     kMyIntelTaskTypeCount
 };
 
@@ -936,47 +935,6 @@ public:
  * @param ring Ring to check for completed seqnos
  */
     void cleanupInFlightBatches(MyIntelRing *ring);
-
-    /*!
-     * @brief Read hardware ring head from HWSP
-     * @param ring Ring object
-     * @return head offset (masked to ring size)
-     */
-    uint32_t ringHardwareHead(MyIntelRing *ring);
-
-    /*!
-     * @brief Submit user batch buffer (ExecBatch - selector 12)
-     * @param ring Ring object (VCS for media, RCS for render)
-     * @param batchGGTT GGTT offset of user batch buffer
-     * @param taskType Task type (kMyIntelTaskTypeUserBatch)
-     * @param packetData Opaque user data
-     * @return kIOReturnSuccess if queued
-     */
-    kern_return_t submitUserBatch(MyIntelRing *ring, uint32_t batchGGTT,
-                                  uint32_t taskType, uint64_t packetData);
-
-    /*!
-     * @brief Wait for batch completion (WaitBatch - selector 13)
-     * @param ring Ring object
-     * @param targetSeqno Target seqno to wait for
-     * @param timeoutMs Timeout in milliseconds
-     * @return kIOReturnSuccess if completed, kIOReturnTimeout if timed out
-     */
-    kern_return_t waitBatchCompletion(MyIntelRing *ring, uint32_t targetSeqno,
-                                      uint32_t timeoutMs);
-
-    /*!
-     * @brief Read ring status (RingStatus - selector 14)
-     * @param ring Ring object
-     * @param outHead Output: hardware head
-     * @param outTail Output: software tail
-     * @param outSpace Output: available space
-     * @param outPending Output: pending batch count
-     * @return kIOReturnSuccess
-     */
-    kern_return_t readRingStatus(MyIntelRing *ring,
-                                 uint32_t *outHead, uint32_t *outTail,
-                                 uint32_t *outSpace, uint32_t *outPending);
 
     /*!
  * @brief Entry point for GT engine interrupt dispatch

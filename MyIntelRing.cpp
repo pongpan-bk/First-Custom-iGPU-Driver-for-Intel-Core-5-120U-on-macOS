@@ -1572,11 +1572,10 @@ bool ringEmitRaw(MyIntelRing *ring, const uint32_t *cmds, uint32_t dwords)
  */
 
 uint32_t emitBcsBlitCopy(uint32_t *dst, uint32_t dstAddr,
-                          uint32_t srcAddr, uint32_t bytes)
+                         uint32_t srcAddr, uint32_t bytes)
 {
     if (!dst || (bytes & (PAGE_SIZE - 1)) != 0 || bytes == 0) return 0;
     if ((dstAddr & (PAGE_SIZE - 1)) != 0 || (srcAddr & (PAGE_SIZE - 1)) != 0) return 0;
-    if (dstAddr == 0 || srcAddr == 0) return 0;  /* Guard against NULL GGTT offset */
 
     /* i915 emit_copy (intel_migrate.c:591-599), instance = 0 */
     uint32_t height = bytes >> PAGE_SHIFT;

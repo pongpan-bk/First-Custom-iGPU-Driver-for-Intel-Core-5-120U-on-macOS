@@ -1,7 +1,75 @@
 # 🛠️ MyIntelGPU.kext — คู่มือใช้งานแบบเป็นระเบียบ (สำหรับ Mac)
 
+> Synced 2026-10-10 from `/Users/ppbk/Desktop/MyIntelGPU-DEPLOY-GUIDE.md` (2026-10-06 revision).
+> Path note: คำสั่ง build/deploy ด้านล่างอ้าง checkout `IntelReviveGPU-Gen-10-12-on-Hackintosh` —
+> ใน checkout นี้ให้แทนด้วย `/Users/ppbk/Documents/GitHub/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS`.
+>
 > สร้าง 2026-08-07 | อัปเดต 2026-08-09: แก้ขั้น kextutil + การตรวจ auxKC (เจอจริงแล้วว่า test-load จาก source dir ทำให้ kext หลุดจาก boot!)
+> อัปเดต 2026-10-06: แก้ path ที่ไม่มีจริง (`Default Project/source`) + เพิ่มข้อตรวจ `OSBundleLibraries`
 > ⚠️ ตำแหน่งใช้งานจริง: `/Library/Extensions/MyIntelGPU.kext` — **ไม่ใช้ผ่าน OpenCore**
+
+---
+
+## 0.0 📍 Path จริง (อัปเดต 2026-10-06)
+
+คู่มือเดิมชี้ไปที่ path ที่ไม่มีอยู่แล้ว ใช้ค่าเหล่านี้แทน:
+
+| | ค่าเก่า (ไม่มีจริง) | ค่าจริง |
+|---|---|---|
+| **repo / source** | /Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh 
+
+| **build entry** | `make` | `make BUILD_NUMBER=<N> KERNEL_SDK_DIR=/Users/ppbk/MacKernelSDK` |
+| **SDK** | — | `/Users/ppbk/MacKernelSDK` (หรือ `/opt/MacKernelSDK` ทั้งคู่มีอยู่) |
+| **บิ้ว + deploy ครบ** | — | `บิ้วMyIntelGPU-AllInOne.command` (อยู่ใน repo root) |
+| **version ที่ใช้** | — | `3.1.26` (ดูหัวข้อ 2.1) |
+
+> ⚠️ `make` ตรงๆ จะ stamp `CFBundleVersion = <major>.<minor>.<git commit count>`
+> ไม่ใช่เวอร์ชันที่ติดตั้งอยู่ ทำให้เลขย้อน/เดินหน้าเอง — ใช้สคริปต์ หรือส่ง `BUILD_NUMBER` เอง
+
+---
+
+## 2.1 ⚠️ `OSBundleLibraries` ต้องตรงกับ macOS (สำคัญมาก)
+
+ค่า `com.apple.kpi.*` ใน `Info.plist` คือ **ABI ของ macOS** ไม่ใช่ Darwin kernel build
+`uname -r` บน Sonoma คือ `23.6.0` แต่ kext ต้องประกาศ `22.6.0` (14.x) — **ไม่ใช่ `23.x`**
+
+เครื่องนี้ (macOS 14.8.9 / kernel 23.6.0) ใช้ค่านี้:
+
+```xml
+<key>com.apple.kpi.bsd</key>       <string>22.6.0</string>
+<key>com.apple.kpi.iokit</key>     <string>22.6.0</string>
+<key>com.apple.kpi.libkern</key>   <string>22.6.0</string>
+<key>com.apple.iokit.IOGraphicsFamily</key> <string>597</string>
+<key>com.apple.iokit.IOPCIFamily</key>      <string>2.9</string>
+```
+
+**ทำไมต้องระวัง:** ถ้าค่า kpi ไม่ตรงกับ OS kext จะ **ไม่ match และไม่โหลด** โดยไม่มี error
+หน้าจอจะขาว/ค้างหลัง reboot ทั้งที่ `sudo cp` สำเร็จและ `kmutil install` ไม่เตือนอะไรเลย
+
+- `kpi.* = 10.0.0` → ไม่ load (เคยเจอกรณีนี้จริง แก้ Info.plist ทั้งไฟล์ทิ้ง)
+- `IOGraphicsFamily = 500.0` → ต่ำกว่า 597 ที่ driver ต้องใช้
+- ตรวจก่อน deploy:
+  ```bash
+  /usr/libexec/PlistBuddy -c "Print :OSBundleLibraries" Info.plist
+  ```
+- `บิ้วMyIntelGPU-AllInOne.command` มี gate นี้อยู่แล้ว ถ้าค่าใน bundle ต่างจากตัวที่ติดตั้งอยู่
+  มันจะหยุดก่อน deploy
+
+---
+
+## 2.2 ⚠️ `Info.plist` ต้องผ่าน `plutil -lint` (เคยพังจริง)
+
+ต้องแก้ XML ให้ถูกก่อน build — `&` ดิบทำให้ทั้งไฟล์ parse ไม่ได้:
+
+```xml
+❌ <string>0x03000000&0xFFFF0000</string>
+✅ <string>0x03000000&amp;0xFFFF0000</string>
+```
+
+ตรวจก่อน build:
+```bash
+plutil -lint Info.plist     # ต้องได้ "OK"
+```
 
 ---
 
@@ -30,6 +98,13 @@
 
 8. **หลักการอ้างอิง**: ทำงานแบบเดียวกับ `Wireless USB Big Sur Adapter.app` (install driver ลง L/E + rebuild cache ตรงๆ) — ง่ายกว่า OC มาก เพราะของเรามาไกลกว่าแค่เขียนค่าหลอก
 
+9. **ห้ามรัน `make` เป็น root** — artifact จะเป็นของ root แล้ว `make clean` ครั้งถัดไปพังด้วย Permission denied
+   - ซ่อม: `sudo chown -R $(whoami):staff MyIntelGPU.kext *.o MyIntelGPUVersion.h`
+
+10. **`Info.plist` ต้องตรงกับ macOS** — `OSBundleLibraries` ผิด = kext ไม่ load เงียบ ๆ (ข้อ 2.1)
+    - เคยเจอจริง: `kpi.* = 10.0.0` บน macOS 14 → ไม่ match → จอขาวหลัง reboot โดยไม่มี error
+    - แก้ไฟล์ plist ทุกครั้งต้อง `plutil -lint` (ข้อ 2.2)
+
 ---
 
 ## 0. ภาพรวม Flow (ทำตามลำดับนี้เสมอ)
@@ -40,7 +115,7 @@
 
 > ⚠️⚠️ **กฎเหล็ก (เจอมาแล้วจริง): ห้าม reboot ระหว่างทางถ้ายังไม่ได้ deploy ไป L/E**
 > ถ้า `kextutil` (test load) ได้รับ approval แล้วคุณ reboot โดย kext ยังอยู่ที่ source dir
-> (`/Users/ppbk/Documents/Default Project/source/...`) → kernelmanagerd จะ rebuild auxKC
+> (`/Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh/...`) → kernelmanagerd จะ rebuild auxKC
 > **ชี้ไปที่ source path (unstaged, อยู่ใน Data volume) ซึ่ง boot activate ไม่ได้**
 > → หลัง reboot kext จะไม่โหลดเลย (kextstat ว่าง) + GPU ไม่มี driver → จอขาว/UI ค้าง
 > วิธีแก้คืน: ดูหัวข้อ 5.3
@@ -50,9 +125,33 @@
 ## 1. Build (ทุกครั้งหลังแก้โค้ด)
 
 ```bash
-cd <โฟลเดอร์ source>
-make clean && make          # ถ้า error แก้ก่อน อย่า deploy ต่อ
+cd /Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh
+
+# ⚠️ ห้ามรัน make เป็น root — artifact จะเป็นของ root แล้ว make clean ครั้งถัดไป
+#    จะพังด้วย Permission denied — ซ่อมด้วย: sudo chown -R $(whoami):staff MyIntelGPU.kext *.o MyIntelGPUVersion.h
+#
+# ⚠️ BUILD_NUMBER ต้องระบุเอง — Makefile:60 default = git commit count
+#    ทำให้เลขเวอร์ชันเดินเอง/ย้อนเทียบกับตัวที่ติดตั้ง
+BN=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" \
+       /Library/Extensions/MyIntelGPU.kext/Contents/Info.plist | awk -F. '{print $3+1}')
+
+plutil -lint Info.plist      # ต้องได้ OK ก่อน build (ข้อ 2.2)
+make BUILD_NUMBER="$BN" KERNEL_SDK_DIR=/Users/ppbk/MacKernelSDK clean
+make BUILD_NUMBER="$BN" KERNEL_SDK_DIR=/Users/ppbk/MacKernelSDK -j$(sysctl -n hw.ncpu)
+codesign -f -s - --timestamp=none MyIntelGPU.kext   # unsigned bundle โหลดไม่ได้
+
+# ถ้า error แก้ก่อน อย่า deploy ต่อ
 ```
+
+หรือใช้สคริปต์ที่ทำ build + deploy + sign + KextPolicy + kmutil ครบในขั้นเดียว:
+
+```bash
+./บิ้วMyIntelGPU-AllInOne.command          # ต่อเลขเองจากตัวที่ติดตั้ง
+./บิ้วMyIntelGPU-AllInOne.command 120      # หรือกำหนดเอง
+```
+
+> `Makefile.standalone` (อยู่ที่ `/Users/ppbk/Desktop/2026-09-16_0d12ef9/`) เป็นอีกทางที่ให้
+> `CFBundleVersion` ตามที่ `Info.plist` เขียนไว้ตรงๆ (ไม่ stamp) ใช้ตอนต้องได้เลข `3.1.26` พอดี
 
 ---
 
@@ -88,7 +187,7 @@ sudo kextunload -b com.pongpan-bk.MyIntelGPU      # ⚠️ bundle id ต้อ�
 sudo cp -R /Library/Extensions/MyIntelGPU.kext /Library/Extensions/MyIntelGPU.kext.bak-$(date +%Y%m%d)
 
 # 3.2 คัดลอกตัวใหม่เข้าไป (เปลี่ยน path ตาม source ของจริง):
-sudo cp -R "/Users/ppbk/Documents/Default Project/source/MyIntelGPU.kext" /Library/Extensions/MyIntelGPU.kext
+sudo cp -R "/Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh/MyIntelGPU.kext" /Library/Extensions/MyIntelGPU.kext
 
 # 3.3 ตั้งสิทธิ์ (ต้องทำทุกครั้ง!):
 sudo chown -R root:wheel /Library/Extensions/MyIntelGPU.kext
@@ -151,7 +250,7 @@ sudo sqlite3 /var/db/SystemPolicyConfiguration/KextPolicy \
   "DELETE FROM kext_load_history_v3 WHERE bundle_id LIKE '%pongpan%';"
 
 # 2) วาง kext ลง L/E ให้ถูกต้อง (ถ้ายังไม่มี):
-sudo cp -R "/Users/ppbk/Documents/Default Project/source/MyIntelGPU.kext" /Library/Extensions/MyIntelGPU.kext
+sudo cp -R "/Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh/MyIntelGPU.kext" /Library/Extensions/MyIntelGPU.kext
 sudo chown -R root:wheel /Library/Extensions/MyIntelGPU.kext
 sudo chmod -R 755 /Library/Extensions/MyIntelGPU.kext
 

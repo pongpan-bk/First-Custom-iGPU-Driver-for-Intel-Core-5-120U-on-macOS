@@ -1,0 +1,41 @@
+# เส้นทางทำต่อ — MyIntelGPU (Gen12 decode)
+
+อัปเดตล่าสุด: 2026-10-02 16:30 (build 4.0.61 ผ่าน)
+
+## สถานะปัจจุบัน (verified 2026-10-02)
+
+| ชั้น | สถานะ |
+|---|---|
+| 1. ring RCS/BCS/VCS สร้างครบ | ✅ `fRingVCS` 25 จุด, ringCreate ที่ L3317-3407 |
+| 2. Media detect (MyIntelMedia.cpp) | ✅ อ่าน `0x138010` จริง ไม่ใช่ hardcode |
+| 3. VCSClient submit path | ✅ `submitVCSWorkload` ทำงาน, batch 1328B drain ได้ (ESR=0) |
+| 4. ExecBatch/WaitBatch/RingStatus | ✅ **เพิ่ง port เข้าแล้ววันนี้** (case 12/13/14 + 3 ฟังก์ชัน) |
+| 5. Build | ✅ 245440 bytes, v4.0.61, 0 error |
+
+## สิ่งที่เพิ่งแก้ไป (ยังไม่ commit)
+
+1. `MyIntelGPU.hpp` — เพิ่ม `kMyIntelTaskTypeUserBatch` + declarations
+   `submitUserBatch()` / `waitBatchCompletion()` / `readRingStatus()`
+2. `MyIntelGPU.cpp` — เพิ่ม body 3 ฟังก์ชัน + static `ringHardwareHead()`
+   (adapt: ใช้ `HWS_SEQNO_DWORD` = 0x20 ของ GitHub ไม่ใช่ 0x40 ของ ref)
+3. `MyIntelGPUClient.cpp` — เพิ่ม case 12 (ExecBatch) / 13 (WaitBatch) / 14 (RingStatus)
+
+## งานต่อ (ถัดไป)
+
+1. **ทดสอบ selector 12-14** ด้วย harness (`myintelvcs_bridge.c`):
+   - `ExecBatch` → ใส่ command stream ลง GEM buffer แล้ว submit
+   - `WaitBatch` → poll seqno ที่ HWSP offset 0x80
+2. **ปิด bug batch 4 dwords**: `HEAD=0xC, ESR=0x1` — probe batch มี 4 dwords
+   (BB_START → bbGgtt → 0x05000000 → 0x00000000) fault ที่ dword 4
+   → คาดว่า PPGTT mapping ของ bbGgtt หรือ batch ไม่มี BB_END
+3. **hardware test จริง** (ผู้ใช้ต้อง authorize) — deploy ไป EFI/OC/Kexts
+   แล้วรัน harness decode H.264 bitstream จริง
+
+## ข้อควรรู้ (จากทีม audit)
+
+- kext ที่โหลดอยู่ตอนนี้ = **3.3.1** แต่ `/Library/Extensions` = v1.0.0 เก่า (Jul 28)
+  และ `/Volumes/EFI-MAIN` ไม่ได้ mount — ต้อง mount ก่อน deploy
+- อย่า spoof ไป KBL (Gen9) driver — crash generator (RISK-07)
+- ห้ามเพิ่ม Lilu/WhateverGreen dependency (decision: standalone)
+- `git status` มี untracked หลายไฟล์ (MyIntelMedia/MyIntelVCS*/MyIntelAccelerator*)
+  — ถ้าจะ commit ต้องรวมพวกนี้ด้วย
