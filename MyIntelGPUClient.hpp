@@ -2,8 +2,6 @@
 #define MyIntelGPUClient_hpp
 
 #include <IOKit/IOUserClient.h>
-#include <IOKit/IOMemoryDescriptor.h>
-#include <IOKit/IOBufferMemoryDescriptor.h>
 #include "MyIntelGPU.hpp"
 
 class MyIntelGPUClient : public IOUserClient {
@@ -20,10 +18,6 @@ private:
 
     MyIntelGPU* fProvider;   // retained in start(), released in free() (Oracle #2: UAF fix)
     task_t      fClientTask;
-    // Dirty-ring shared memory for selector 10 (IOAccelSharedSetupDirtyRing)
-    IOMemoryDescriptor* fDirtyRingMD;
-    IOMemoryMap*        fDirtyRingMap;
-    uint64_t            fDirtyRingUserVA;
 
 public:
     virtual bool initWithTask(task_t owningTask, void * securityToken, UInt32 type) override;

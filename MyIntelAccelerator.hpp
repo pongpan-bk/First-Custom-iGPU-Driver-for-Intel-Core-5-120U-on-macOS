@@ -20,10 +20,6 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/graphics/IOAccelerator.h>
-#include <IOKit/graphics/IOAccelSurfaceConnect.h>
-#include <IOKit/IOBufferMemoryDescriptor.h>
-#include <IOKit/IOMemoryDescriptor.h>
-#include "MyIntelGEMBuffer.hpp"
 
 class MyIntelGPU;
 
@@ -72,22 +68,6 @@ public:
     IOAccelID getAccelID(void) const { return fAccelIDValid ? fAccelID : 0; }
     MyIntelGPU *getGPU(void) const { return fGPU; }
 
-    /* Mission C Phase 3b — persistent surface backing.
-     * Survives client open/close so WindowServer's reopen loop
-     * doesn't churn 135MB GEM allocations. */
-    struct SurfaceEntry {
-        uint32_t sid;
-        uint32_t colorMode;
-        uint32_t w;
-        uint32_t h;
-        MyIntelGEMBuffer *backing;
-        uint64_t bytes;
-    };
-    SurfaceEntry *surfaceFindOrCreate(uint32_t sid);
-    void surfaceReleaseAll(void);
-    void blitSurfaceToFramebuffer(mach_vm_address_t src_user_addr,
-                                  uint32_t width, uint32_t height, uint32_t stride);
-
 private:
     /*! @brief Publish the ICL-style property vocabulary (see .cpp). */
     bool publishProperties(void);
@@ -96,11 +76,6 @@ private:
     IOOptionBits fAttachMode;
     IOAccelID    fAccelID;
     bool         fAccelIDValid;
-
-    static const int kMaxSurfaces = 16;
-    SurfaceEntry fSurfaces[16];
-    int          fSurfEvict;   /* round-robin eviction when full */
-    IOLock      *fSurfaceLock; /* guards table ops across WS threads */
 };
 
 /*! @brief Read-only diagnostic user client for the accelerator node.
@@ -127,18 +102,6 @@ public:
 
 private:
     MyIntelAccelerator *fAccel;  /* provider, not retained */
-
-    uint32_t fClientType;  /* user-client type from initWithTask (5 = Metal IOAccel device/shared contract) */
-    uint32_t fSurfaceID;  /* last SetIDMode target */
-    uint32_t fColorMode;
-    uint32_t fShapeW;
-    uint32_t fShapeH;
-
-    task_t fClientTask;
-    IOBufferMemoryDescriptor *fDirtyRingMD;
-    IOMemoryMap *fDirtyRingMap;
-    mach_vm_address_t fDirtyRingUserVA;
-
 };
 
 #endif /* __MY_INTEL_ACCELERATOR_HPP__ */

@@ -73,7 +73,6 @@
 #define GEN6_GDRST_REG_OFFSET       0x941C
 #define GEN11_GRDOM_MEDIA           (1u << 5)
 #define GEN11_GRDOM_SFC0            (1u << 17)
-#define VCS0_GDRST_DOMAIN           (GEN11_GRDOM_MEDIA | GEN11_GRDOM_SFC0)
 #define RING_ESR_OFFSET             0xB8
 #define RING_HWS_PGA_OFFSET         0x80    /* Hardware Status Page */
 #define RING_HWS_STAM_OFFSET        0x98    /* Interrupt Mask for Status Page */
@@ -150,40 +149,42 @@
 
 /*
  * ─────────────────────────────────────────────
- *  LRC (Logical Ring Context) image — Gen12 FULL (RCS + XCS engines)
+ *  LRC (Logical Ring Context) image — Gen12 RCS
  * ─────────────────────────────────────────────
- *  i915 intel_lrc_reg.h / intel_lrc.c. The context object is 6 pages (24KB):
- *  page 0 = PPHWSP (full 4KB)
- *  page 1 = RCS  register state (4KB)  — LRC_STATE_DWORDS (185 dwords)
- *  page 2 = VCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
- *  page 3 = VECS register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
- *  page 4 = BCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
- *  page 5 = CCS  register state (4KB)  — LRC_STATE_DWORDS_XCS (52 dwords)
- *  Total = 6 pages = 24KB (0x6000)
+ *  i915 intel_lrc_reg.h / intel_lrc.c. The context object is 4 pages:
+ *  page 0 = PPHWSP (full 4KB), register state starts at LRC_STATE_OFFSET
+ *  = LRC_STATE_PN(1) * PAGE_SIZE = 0x1000 (mainline intel_lrc.h:27).
+ *  The state is a mini batch of MI_LOAD_REGISTER_IMM commands; dword 0 of the
+ *  state MUST be MI_NOOP before the first MI_LRI (intel_gpu_commands.h:149).
+ *  Layout = gen12_rcs_offsets verbatim (intel_lrc.c:455-549), 185 dwords:
+ *    dw  0       : MI_NOOP
+ *    dw  1-27    : LRI(13,POSTED)  0x244 0x034 0x030 0x038 0x03c 0x168
+ *                  0x140 0x110 0x1c0 0x1c4 0x1c8 0x180 0x2b4
+ *    dw  28-32   : NOP(5)
+ *    dw  33-51   : LRI(9,POSTED)   0x3a8 0x28c 0x288 0x284 0x280 0x27c
+ *                  0x278 0x274 0x270   ← PDP3..PDP0 (PDP0 = PML4, 4-level)
+ *    dw  52-58   : LRI(3,POSTED)   0x1b0 0x5a8 0x5ac
+ *    dw  59-64   : NOP(6)
+ *    dw  65-67   : LRI(1, flags=0) 0x0c8   ← NOT posted (no FORCE_POSTED)
+ *    dw  68-80   : NOP(13)
+ *    dw  81-183  : LRI(51,POSTED)  0x588 x6, 0x028 0x09c 0x0c0 0x178 0x17c
+ *                  0x358 0x170 0x150 0x154 0x158 0x41c, 0x600..0x67c, 0x068 0x084
+ *    dw  184     : MI_NOOP
+ *  Value-slot dword indices (= i915 CTX_* = bspec off + 1) — see defines below.
  */
 #define LRC_STATE_OFFSET        0x1000          /* = LRC_STATE_PN(1) * PAGE_SIZE */
-#define LRC_CONTEXT_SIZE        0x6000          /* 6 pages — full Gen12 LRC (PPHWSP + RCS + VCS + VECS + BCS + CCS) */
+#define LRC_CONTEXT_SIZE        0x4000          /* 4 pages — gen12 RCS context_size (PPHWSP+state) */
 #define LRC_STATE_DWORDS        185             /* gen12_rcs_offsets total (dw 0..184) */
+
+/* XCS (BCS/VCS/VECS) context state size — gen12_xcs_offsets total (52 dw):
+ *   dw 0       : MI_NOOP
+ *   dw 1-27    : LRI(13,POSTED)  identical to RCS block 1 (0x244..0x2b4)
+ *   dw 28-32   : NOP(5)
+ *   dw 33-51   : LRI(9,POSTED)   identical to RCS block 2 (0x3a8 + PDP3..PDP0)
+ * No blocks 3-5 (no indirect-ctx regs, no R_PWR_CLK_STATE, no GPR block).
+ * CTX_* value-slot indices are therefore the SAME as RCS for blocks 1-2
+ * (0x03..0x33) — lrcUpdateRingRegs() + lrcAllocPPGTT() patch them unchanged. */
 #define LRC_STATE_DWORDS_XCS    52              /* gen12_xcs_offsets total (dw 0..51) */
-
-#define LRC_STATE_PN(engine)    (engine)        /* page number for engine: 1=RCS, 2=VCS, 3=VECS, 4=BCS, 5=CCS */
-#define LRC_STATE_OFFSET_PN(pn) ((pn) * PAGE_SIZE)
-
-/* LRC context offsets per engine (page-aligned) */
-#define LRC_RCS_OFFSET          LRC_STATE_OFFSET_PN(1)  /* 0x1000 */
-#define LRC_VCS_OFFSET          LRC_STATE_OFFSET_PN(2)  /* 0x2000 */
-#define LRC_VECS_OFFSET         LRC_STATE_OFFSET_PN(3)  /* 0x3000 */
-#define LRC_BCS_OFFSET          LRC_STATE_OFFSET_PN(4)  /* 0x4000 */
-#define LRC_CCS_OFFSET          LRC_STATE_OFFSET_PN(5)  /* 0x5000 */
-
-/* Engine types for LRC context building */
-enum {
-    kMyIntelLrcEngineRCS  = 1,
-    kMyIntelLrcEngineVCS  = 2,
-    kMyIntelLrcEngineVECS = 3,
-    kMyIntelLrcEngineBCS  = 4,
-    kMyIntelLrcEngineCCS  = 5,
-};
 
 /* Value-slot dword indices (= i915 CTX_* intel_lrc_reg.h = bspec off + 1).
  * Block 1 (dw 1-27): */
@@ -240,14 +241,14 @@ enum {
 
 /* RING_CTL bit definitions
  * RING_CTL field (bits 13:11) = (size / 4KB) - 1 = sizeInPages - 1
- * With (sizeInPages-1) << RING_CTL_SIZE_SHIFT = (sizeInPages-1) << 11
- *   → bits 13:11 encode (pages-1) per i915 (RING_CTL_SIZE_SHIFT = 11)
+ * With (sizeInPages-1) << RING_CTL_SIZE_SHIFT
+ *   → size field encodes (pages-1) per i915
  * ⚠️ DO NOT use shift 12 — HW decodes bits 13:11, so << 12 shifts the
  *   field one bit too far (16KB ring would decode as 28KB, HW walks
  *   past the buffer → hang on first submit).
  */
 #define RING_CTL_VALID              (1U << 0)
-#define RING_CTL_SIZE_SHIFT         11      /* (sizeInPages - 1) << 11 = size field at bits 13:11 */
+#define RING_CTL_SIZE_SHIFT         ((1u << 3) | (1u << 1) | (1u << 0))      /* (sizeInPages-1) << RING_CTL_SIZE_SHIFT = size field */
 
 /* RING_MI_MODE bit definitions */
 #define RING_MI_MODE_STOP_RING      (1U << 0)   /* Write 1 = stop */
@@ -261,7 +262,6 @@ enum {
 typedef enum {
     kMyIntelEngineRCS = 0,      /* Render Command Streamer */
     kMyIntelEngineBCS = 1,      /* Blitter Command Streamer */
-    kMyIntelEngineVCS = 2,      /* Video Command Streamer */
     kMyIntelEngineVECS = 3,     /* Video Enhancement */
     kMyIntelEngineCount
 } MyIntelEngineType;
@@ -311,23 +311,6 @@ struct MyIntelRing {
     uint32_t          ppgttPdeEncode; /* PDE flags (PRESENT|RW = 0x3) */
     uint32_t          ppgttPteEncode; /* PTE flags (PRESENT|RW = 0x3) */
 
-    /* Max pending client batches queued before the next kick drains them */
-#define RING_PENDING_MAX            8
-
-    /* Pending client batch queue — F8b multi-batch: submitClientTaskViaRing()
-     * appends up to RING_PENDING_MAX entries; kickCommandSet2Locked() drains
-     * the whole queue in order (one BB_START per entry, then USER_INTERRUPT).
-     * Ring-buffer semantics: pendingHead = next entry to consume,
-     * pendingCount = queued entries (slot = (head + i) % RING_PENDING_MAX). */
-    struct PendingBatch {
-        uint32_t          ggtt;        /* Batch GGTT offset for BB_START (0 = none) */
-        uint32_t          taskType;    /* Client task type (kMyIntelTaskType_*) */
-        uint64_t          packetData;  /* Client packet data (task payload) */
-    };
-    PendingBatch      pendingQueue[RING_PENDING_MAX];
-    uint32_t          pendingHead;    /* index of next entry to drain */
-    uint32_t          pendingCount;   /* number of queued entries */
-
     /* Ring State (byte offsets within ring) */
     uint32_t          head;         /* RING_HEAD shadow (read position, updated by HW) */
     uint32_t          tail;         /* RING_TAIL shadow (write position, updated by us) */
@@ -336,7 +319,6 @@ struct MyIntelRing {
 
     /* Status */
     bool              initialized;  /* Ring has been initialized */
-    bool              workPending;  /* Client work queued → submit on next IRQ kick */
     uint32_t          lastTail;     /* Last tail written via RING_TAIL register */
     uint32_t          wraparound;   /* Ring wraparound count (debug) */
 
@@ -449,20 +431,8 @@ static inline bool ringIsFull(const MyIntelRing *ring)
 #define MI_FLUSH_DW_GEN12           (MI_FLUSH_DW + 1 | MI_FLUSH_DW_OP_STOREDW | MI_FLUSH_DW_STORE_INDEX)  /* 0x13214002 */
 #define MI_FLUSH_DW_MEDIA_FLUSH     (1U << 1)
 #define LRC_PPHWSP_SCRATCH_ADDR     0x800u             /* i915 intel_lrc.h LRC_PPHWSP_PN(0)*PAGE + 0x800 */
-
-/* MFX_WAIT — Insert wait for pending media operations (Gen12+ VCS) */
-#define MFX_WAIT                   0x15000000
-#define MFX_WAIT_EN                (1U << 0)
 #define MI_FLUSH_DW_MEDIA_ONLY     (MI_FLUSH_DW | MI_FLUSH_DW_MEDIA_FLUSH)
 
-/* MI_BATCH_BUFFER_START — VERIFIED against i915 gt/intel_gpu_commands.h:188:
- *   MI_BATCH_BUFFER_START_GEN8 = MI_INSTR(0x31, 1) = 0x18800001
- * ⚠️ bit8 is the NON-SECURE bit (gen8_emit_bb_start: flags &
- * I915_DISPATCH_SECURE ? 0 : BIT(8)), NOT "2nd-level" as this header
- * previously claimed. Address is a PPGTT VA in the identity map, so no
- * GGTT-selection bits are set (pre-Gen8 semantics). */
-#define MI_BATCH_BUFFER_START_GEN8   0x18800001   /* MI_INSTR(0x31, 1) */
-#define MI_BATCH_BUFFER_START_NONSEC (1U << 8)    /* non-secure batch */
 #define MI_BATCH_BUFFER_END          0x05000000
 
 /* ── PPGTT identity-map (4-level / DESC_LEGACY_64B) ─────────────────────
@@ -512,9 +482,6 @@ static inline bool ringIsFull(const MyIntelRing *ring)
 #define MI_STORE_REGISTER_MEM       (0x12000000u | 1)
 #define MI_STORE_REGISTER_MEM_GEN8  (0x12000000u | 2)
 #define MI_SRM_LRM_GLOBAL_GTT       (1U << 22)   /* bit22 = 0 → PPGTT, 1 → GGTT */
-#define MI_LOAD_REGISTER_MEM_GEN8   0x14800002u  /* MI_INSTR(0x29,2) */
-#define MI_LOAD_REGISTER_REG        0x15000001u  /* MI_INSTR(0x2A,1) */
-#define MI_LRR_SOURCE_CS_MMIO       (1U << 18)
 
 /* CS_GPR0 (RCS) = RENDER_RING_BASE (0x2000) + 0x600 — i915 gt/intel_engine_regs.h:238
  * GEN8_RING_CS_GPR(base, n) = base + 0x600 + n*8. Safe scratch register:
@@ -874,12 +841,6 @@ bool ringEmitNOOP(MyIntelRing *ring);
  */
 bool ringEmitUserInterrupt(MyIntelRing *ring);
 
-/* Gen9 XY_FAST_COPY_BLT (10-dw form, linear 32bpp) — present surface to scanout */
-bool ringEmitSurfacePresent(MyIntelRing *bcs,
-                            uint32_t dstGgtt, uint32_t dstPitchBytes,
-                            uint32_t srcGgtt, uint32_t srcPitchBytes,
-                            uint16_t wPx, uint16_t hPx);
-
 /*!
  * @brief  Emit MI_FLUSH_DW — flush GPU caches
  *
@@ -963,38 +924,5 @@ uint32_t emitBreadcrumbSeqno(uint32_t *dst, uint32_t hwspGttAddr, uint32_t seqno
  * @return true = success
  */
 bool lrcAllocPPGTT(MyIntelRing *ring, const MyIntelRingCallbacks *cb);
-
-/*!
- * @brief  Map a batch buffer's physical pages into the PPGTT window at
- *         VA = GGTT offset (identity). Writes PTEs from pagesPhys[].
- *
- * @param ring       Ring object
- * @param batchGGTT  GGTT offset of batch (its PPGTT VA in identity map)
- * @param pagesPhys  Per-page physical addresses of the batch buffer
- * @param pageCount  Number of pages
- * @return true = success
- */
-bool lrcMapBatchPages(MyIntelRing *ring, uint32_t batchGGTT,
-                      const uint64_t *pagesPhys, uint32_t pageCount);
-
-/*!
- * @brief  Emit MI_BATCH_BUFFER_START (4 dwords, i915 gen8_emit_bb_start).
- *         [ARB_ENABLE][BB_START_GEN8|NONSEC][lo][hi] — qword aligned.
- *
- * @param ring  Ring object
- * @param va    Batch PPGTT VA (= GGTT offset in identity map)
- * @return true = success
- */
-bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va);
-
-/*!
- * @brief  Build XCS (VCS/VECS/BCS/CCS) context at a specific LRC page offset.
- *         All XCS engines share the same 52-dword layout (gen12_xcs_offsets).
- *
- * @param ring        Ring object
- * @param pageOffset  Page offset in LRC context image (e.g., LRC_VCS_OFFSET)
- * @return true = success
- */
-bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset);
 
 #endif /* __MY_INTEL_RING_HPP__ */

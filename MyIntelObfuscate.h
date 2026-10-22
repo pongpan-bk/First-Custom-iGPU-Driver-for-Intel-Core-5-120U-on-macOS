@@ -26,17 +26,6 @@
     } while(0)
 
 /* Pre-encrypted strings (XOR with 0x5A) — verified round-trip */
-/* "MyIntelVCS" encrypted */
-static const uint8_t ENCRYPTED_MyIntelVCS[] = {
-    0x17, 0x23, 0x13, 0x34, 0x2E, 0x3F, 0x36, 0x0C, 0x19, 0x09
-};
-
-/* "MyIntelVCSClient" encrypted */
-static const uint8_t ENCRYPTED_MyIntelVCSClient[] = {
-    0x17, 0x23, 0x13, 0x34, 0x2E, 0x3F, 0x36, 0x0C, 0x19, 0x09,
-    0x19, 0x36, 0x33, 0x3F, 0x34, 0x2E
-};
-
 /* "MyIntelGPU" encrypted */
 static const uint8_t ENCRYPTED_MyIntelGPU[] = {
     0x17, 0x23, 0x13, 0x34, 0x2E, 0x3F, 0x36, 0x1D, 0x0A, 0x0F
@@ -72,13 +61,6 @@ static const uint8_t ENCRYPTED_IOUserClientClass[] = {
 };
 
 /* Layer 2: Register address obfuscation functions */
-static inline uint32_t obf_getVCSBase(void) {
-    /* 0x1C0000 = 0x0E0000 + 0x0E0000 */
-    volatile uint32_t a = 0x0E0000;
-    volatile uint32_t b = 0x0E0000;
-    return (a + b);
-}
-
 static inline uint32_t obf_getRingTail(void) {
     /* 0x30 = (0x15 << 1) + 6 */
     volatile uint32_t x = 0x15;
@@ -103,18 +85,6 @@ static inline uint32_t obf_getRingCtl(void) {
     return (x << 1) + 18;
 }
 
-static inline uint32_t obf_getMfxStatus(void) {
-    /* 0x0800 = 0x0400 << 1 */
-    volatile uint32_t x = 0x0400;
-    return (x << 1);
-}
-
-static inline uint32_t obf_getHcpStatus(void) {
-    /* 0x2800 = 0x1400 << 1 */
-    volatile uint32_t x = 0x1400;
-    return (x << 1);
-}
-
 /* "MyIntelGPUClient" encrypted */
 static const uint8_t ENCRYPTED_MyIntelGPUClient[] = {
     0x17, 0x23, 0x13, 0x34, 0x2E, 0x3F, 0x36, 0x1D, 0x0A, 0x0F,
@@ -122,8 +92,6 @@ static const uint8_t ENCRYPTED_MyIntelGPUClient[] = {
 };
 
 /* Decrypted string buffers (runtime only) */
-static char DEC_BUFFER_VCS[11];
-static char DEC_BUFFER_VCSClient[17];
 static char DEC_BUFFER_GPU[11];
 static char DEC_BUFFER_GPUClient[17];
 static char DEC_BUFFER_Ring[12];
@@ -134,8 +102,6 @@ static char DEC_BUFFER_IOUserClient[18];
 
 /* Initialize decrypted strings (call once at startup) */
 static inline void obfuscate_init(void) {
-    DECRYPT_STRING(ENCRYPTED_MyIntelVCS, DEC_BUFFER_VCS, 10);
-    DECRYPT_STRING(ENCRYPTED_MyIntelVCSClient, DEC_BUFFER_VCSClient, 16);
     DECRYPT_STRING(ENCRYPTED_MyIntelGPU, DEC_BUFFER_GPU, 10);
     DECRYPT_STRING(ENCRYPTED_MyIntelGPUClient, DEC_BUFFER_GPUClient, 16);
     DECRYPT_STRING(ENCRYPTED_MyIntelRing, DEC_BUFFER_Ring, 11);

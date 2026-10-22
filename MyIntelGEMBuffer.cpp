@@ -42,24 +42,6 @@
 #endif
 
 /*
- * GGTT operation sequence counter — telemetry per audit.
- *
- * Every bind/unbind/destroy consumes a monotonically increasing sequence
- * number, and every PTE-mutation log line carries it, so dmesg parses into
- * correlated groups:
- *
- *   [GGTT] seq=N bind buf=X → PTE batch + barrier
- *   [GGTT] seq=N bind invalidate...        ← trampoline → GFX_FLSH_CNTL write
- *   [GGTT] seq=N bind complete — MAPPED
- *   [GGTT] seq=N unbind / destroy / refused
- *
- * Not atomic by design — GEM ops are serialized on the owning workloop in
- * practice; a torn read only mislabels a debug line, it can never corrupt
- * state.
- */
-static uint32_t gGgttSeq = 0;
-
-/*
  * ─────────────────────────────────────────────
  *  Forward Declarations (internal)
  * ─────────────────────────────────────────────
@@ -75,14 +57,12 @@ static bool     gemBufferResolvePages(MyIntelGEMBuffer *buf);
  */
 
 MyIntelGEMBuffer *gemBufferCreate(
-    uint32_t          size,
-    uint32_t          flags,
-    uint32_t         *gsmPtr,
-    uint32_t          gttTotal,
-    void             *apertureVA,
-    uint64_t          apertureSize,
-    GGTTInvalidateFunc invalidateFn,
-    void             *invalidateCtx)
+    uint32_t    size,
+    uint32_t    flags,
+    uint32_t   *gsmPtr,
+    uint32_t    gttTotal,
+    void       *apertureVA,
+    uint64_t    apertureSize)
 {
     GEM_TRACE("gemBufferCreate: size=%u flags=0x%X", size, flags);
 
@@ -109,7 +89,6 @@ MyIntelGEMBuffer *gemBufferCreate(
     buf->cpuAddr   = NULL;
     buf->physAddr  = 0;
     buf->ggttOffset = 0;
-    buf->state     = 0;
 
     /* Allocate physical pages */
     if (!gemBufferAllocPages(buf)) {
@@ -118,10 +97,9 @@ MyIntelGEMBuffer *gemBufferCreate(
         return NULL;
     }
 
-    /* Bind to GGTT (if GGTT is available). Invalidates TLB internally after
-     * the PTE batch (invalidate-by-contract) — MAPPED set only after that. */
+    /* Bind to GGTT (if GGTT is available) */
     if (gsmPtr && gttTotal > 0) {
-        if (!gemBufferBindToGGTT(buf, gsmPtr, gttTotal, invalidateFn, invalidateCtx)) {
+        if (!gemBufferBindToGGTT(buf, gsmPtr, gttTotal)) {
             GEM_DEBUG("WARNING: GGTT bind failed — CPU-only buffer");
             /* Continue — buffer still usable from CPU side */
         }
@@ -129,30 +107,25 @@ MyIntelGEMBuffer *gemBufferCreate(
 
     /* CPU-side mapping: already via cpuAddr from IOMallocAligned */
 
-    GEM_DEBUG("gemBufferCreate: OK size=%u pages=%u cpu=%p phys=%llX ggtt=%X state=%X",
-              buf->size, buf->pages, buf->cpuAddr, buf->physAddr, buf->ggttOffset, buf->state);
+    GEM_DEBUG("gemBufferCreate: OK — size=%u pages=%u cpuAddr=%p physAddr=0x%llX ggttOffset=0x%X",
+              buf->size, buf->pages, buf->cpuAddr, buf->physAddr, buf->ggttOffset);
 
     return buf;
 }
 
 void gemBufferDestroy(
-    MyIntelGEMBuffer  *buf,
-    uint32_t          *gsmPtr,
-    GGTTInvalidateFunc invalidateFn,
-    void              *invalidateCtx)
+    MyIntelGEMBuffer *buf,
+    uint32_t         *gsmPtr)
 {
     if (!buf || buf->magic != GEM_BUFFER_MAGIC) {
         return;
     }
 
-    uint32_t seq = ++gGgttSeq;
-    GEM_DEBUG("[GGTT] seq=%u destroy buf=%p size=%u", seq, buf, buf->size);
+    GEM_TRACE("gemBufferDestroy: buf=%p size=%u", buf, buf->size);
 
-    /* Unbind from GGTT first — clears PTEs + TLB-invalidates internally
-     * (invalidate-by-contract), so no stale translation can survive the
-     * backing free below. */
+    /* Unbind from GGTT first */
     if (gsmPtr && buf->ggttOffset != 0) {
-        gemBufferUnbindFromGGTT(buf, gsmPtr, 0, invalidateFn, invalidateCtx);
+        gemBufferUnbindFromGGTT(buf, gsmPtr, 0);
     }
 
     /* Free physical pages */
@@ -168,11 +141,9 @@ void gemBufferDestroy(
 }
 
 bool gemBufferBindToGGTT(
-    MyIntelGEMBuffer  *buf,
-    uint32_t          *gsmPtr,
-    uint32_t           gttTotal,
-    GGTTInvalidateFunc invalidateFn,
-    void              *invalidateCtx)
+    MyIntelGEMBuffer *buf,
+    uint32_t         *gsmPtr,
+    uint32_t          gttTotal)
 {
     if (!buf || !gsmPtr) return false;
     if (buf->magic != GEM_BUFFER_MAGIC) return false;
@@ -182,7 +153,7 @@ bool gemBufferBindToGGTT(
 
     /* bind → unbind */
     if (buf->ggttOffset != 0) {
-        gemBufferUnbindFromGGTT(buf, gsmPtr, gttTotal, invalidateFn, invalidateCtx);
+        gemBufferUnbindFromGGTT(buf, gsmPtr, gttTotal);
     }
 
     /* free region GGTT */
@@ -201,7 +172,7 @@ bool gemBufferBindToGGTT(
 
     for (uint32_t i = 0; i < buf->pages; i++) {
         /* Per-page PTE — use pagesPhys[], NEVER physAddr + i*PAGE */
-        uint64_t pte = gemBufferMakePTE(buf->pagesPhys[i], GEM_PTE_SYSTEM_DEFAULT);
+        uint64_t pte = gemBufferMakePTE(buf->pagesPhys[i], GEM_PTE_LLC);
 
         /* writeq() — atomic 64-bit write on x86_64 */
         gsm64[pageIdx + i] = pte;
@@ -210,23 +181,6 @@ bool gemBufferBindToGGTT(
     /* One barrier for the whole batch */
     OSSynchronizeIO();
 
-    uint32_t seq = ++gGgttSeq;
-    buf->bindSeq = seq;         /* correlatable with [PLANE] present/retire logs */
-    GEM_DEBUG("[GGTT] seq=%u bind buf=%p ggtt=0x%X pages=%u",
-              seq, buf, buf->ggttOffset, buf->pages);
-
-    /* Invalidate-by-contract: no PTE mutation escapes without a TLB
-     * invalidate. MAPPED is published only AFTER invalidate completes. */
-    if (invalidateFn) {
-        GEM_DEBUG("[GGTT] seq=%u bind invalidate...", seq);
-        invalidateFn(invalidateCtx);
-        GEM_DEBUG("[GGTT] seq=%u bind complete — MAPPED", seq);
-    } else {
-        GEM_DEBUG("WARNING: bind without invalidateFn — stale TLB risk (buf=%p)",
-                  buf);
-    }
-    buf->state |= GEM_STATE_MAPPED;
-
     GEM_TRACE("gemBufferBindToGGTT: OK — ggttOffset=0x%X phys=0x%llX",
               buf->ggttOffset, buf->physAddr);
 
@@ -234,131 +188,19 @@ bool gemBufferBindToGGTT(
 }
 
 void gemBufferUnbindFromGGTT(
-    MyIntelGEMBuffer  *buf,
-    uint32_t          *gsmPtr,
-    uint32_t           gttTotal,
-    GGTTInvalidateFunc invalidateFn,
-    void              *invalidateCtx)
+    MyIntelGEMBuffer *buf,
+    uint32_t         *gsmPtr,
+    uint32_t          gttTotal)
 {
-    (void)gttTotal;
     if (!buf || !gsmPtr) return;
     if (buf->ggttOffset == 0) return;
 
-    uint32_t seq = ++gGgttSeq;
-
-    /* Refuse to clear PTEs while a plane is still scanning this buffer.
-     * Caller must restorePlane()/wait-for-latch FIRST — ggttInvalidate()
-     * alone does NOT make freeing an active scanout safe. */
-    if (buf->state & GEM_STATE_SCANOUT) {
-        GEM_DEBUG("ERROR: [GGTT] seq=%u unbind refused — buffer still SCANOUT "
-                  "(buf=%p ggtt=0x%X). restorePlane() required before destroy.",
-                  seq, buf, buf->ggttOffset);
-        return;
-    }
-    if (buf->state & GEM_STATE_IN_FLIGHT) {
-        GEM_DEBUG("ERROR: [GGTT] seq=%u unbind refused — buffer still IN_FLIGHT "
-                  "(buf=%p ggtt=0x%X). Retire/fence before unbind.",
-                  seq, buf, buf->ggttOffset);
-        return;
-    }
-
-    GEM_DEBUG("[GGTT] seq=%u unbind buf=%p ggtt=0x%X pages=%u",
-              seq, buf, buf->ggttOffset, buf->pages);
+    GEM_TRACE("gemBufferUnbindFromGGTT: ggttOffset=0x%X", buf->ggttOffset);
 
     uint32_t startPage = buf->ggttOffset >> GEM_PAGE_SHIFT;
     gemBufferClearPTEs(gsmPtr, startPage, buf->pages);
 
-    /* Invalidate-by-contract after PTE clear */
-    if (invalidateFn) {
-        GEM_DEBUG("[GGTT] seq=%u unbind invalidate...", seq);
-        invalidateFn(invalidateCtx);
-        GEM_DEBUG("[GGTT] seq=%u unbind complete — unmapped", seq);
-    } else {
-        GEM_DEBUG("WARNING: unbind without invalidateFn — stale TLB risk (buf=%p)",
-                  buf);
-    }
-    buf->state &= ~GEM_STATE_MAPPED;
     buf->ggttOffset = 0;
-}
-
-/*
- * ─────────────────────────────────────────────
- *  External (non-GEM) GGTT binding
- * ─────────────────────────────────────────────
- *  Same PTE-write + barrier + invalidate sequence as gemBufferBindToGGTT,
- *  but for caller-owned physical pages. Allocates/frees NO pages and touches
- *  no MyIntelGEMBuffer. Used to give userspace-owned memory a GGTT address.
- */
-uint32_t ggttBindExternalPages(
-    const uint64_t    *pagesPhys,
-    uint32_t           pageCount,
-    uint32_t          *gsmPtr,
-    uint32_t           gttTotal,
-    GGTTInvalidateFunc invalidateFn,
-    void              *invalidateCtx)
-{
-    if (!gsmPtr || !pagesPhys || gttTotal == 0 || pageCount == 0) {
-        return 0;
-    }
-
-    uint32_t pageIdx = gemBufferFindFreeRegion(gsmPtr, gttTotal, pageCount);
-    if (pageIdx == 0) {
-        GEM_DEBUG("ERROR: ggttBindExternalPages: no free GGTT region (%u pages)",
-                  pageCount);
-        return 0;
-    }
-
-    const uint32_t ggttOffset = pageIdx * GEM_PAGE_SIZE;
-    const uint32_t seq = ++gGgttSeq;
-
-    volatile uint64_t *gsm64 = (volatile uint64_t *)gsmPtr;
-    for (uint32_t i = 0; i < pageCount; i++) {
-        gsm64[pageIdx + i] = gemBufferMakePTE(pagesPhys[i], GEM_PTE_SYSTEM_DEFAULT);
-    }
-
-    /* One barrier for the whole batch */
-    OSSynchronizeIO();
-
-    GEM_DEBUG("[GGTT] seq=%u bind ggtt=0x%X pages=%u",
-              seq, ggttOffset, pageCount);
-
-    if (invalidateFn) {
-        GEM_DEBUG("[GGTT] seq=%u bind invalidate...", seq);
-        invalidateFn(invalidateCtx);
-        GEM_DEBUG("[GGTT] seq=%u bind complete — MAPPED", seq);
-    } else {
-        GEM_DEBUG("WARNING: bind without invalidateFn — stale TLB risk (ggtt=0x%X)",
-                  ggttOffset);
-    }
-
-    return ggttOffset;
-}
-
-bool ggttUnbindExternalPages(
-    uint32_t           ggttOffset,
-    uint32_t           pageCount,
-    uint32_t          *gsmPtr,
-    GGTTInvalidateFunc invalidateFn,
-    void              *invalidateCtx)
-{
-    if (!gsmPtr || ggttOffset == 0 || pageCount == 0) {
-        return false;
-    }
-
-    const uint32_t startPage = ggttOffset >> GEM_PAGE_SHIFT;
-    gemBufferClearPTEs(gsmPtr, startPage, pageCount);
-
-    const uint32_t seq = ++gGgttSeq;
-    if (invalidateFn) {
-        GEM_DEBUG("[GGTT] seq=%u extern-unbind invalidate...", seq);
-        invalidateFn(invalidateCtx);
-        GEM_DEBUG("[GGTT] seq=%u extern-unbind complete — unmapped", seq);
-    } else {
-        GEM_DEBUG("WARNING: extern-unbind without invalidateFn — stale TLB risk (ggtt=0x%X)",
-                  ggttOffset);
-    }
-
-    return true;
 }
 
 /* 🚨 แก้ปมส้นตีน: อัปเกรดตัวล้างแคช (TLB Invalidate) ให้รองรับสถาปัตยกรรม Gen 12 อ้างอิงตาม Linux XE driver */
@@ -411,7 +253,7 @@ uint32_t gemBufferFindFreeRegion(
         }
     }
 
-    GEM_DEBUG("WARNING: no free GGTT region (%u entries, need %u)",
+    GEM_DEBUG("WARNING: no free GGTT region found (searched %u entries, need %u pages)",
               maxPages, pages);
     return 0;
 }

@@ -15,65 +15,61 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>4.3.0</string>
-	<key>CFBundleSignature</key>
-	<string>????</string>
+	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>4.4.137</string>
+	<string>1.0.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_GPU</key>
 		<dict>
-			<key>AutoMatch_MetalPlugin</key>
-			<string>MyIntelGPUMTLDriver.bundle</string>
-			<key>AutoMatch_MetalStatisticsName</key>
-			<string>Raptor Lake-U</string>
+			<key>AAPL,ig-platform-id</key>
+			<data>
+			AACbPg==
+			</data>
 			<key>CFBundleIdentifier</key>
 			<string>com.pongpan-bk.MyIntelGPU</string>
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
-			<key>IOGLBundleName</key>
-			<string>AppleIntelKBLGraphicsGLDriver</string>
-			<key>IOMatchCategory</key>
-			<string>IOAccelerator</string>
 			<key>IOPCIClassMatch</key>
 			<string>0x03000000&amp;0xff000000</string>
-			<key>IOPCIMatch</key>
-			<string>0xa7ac8086</string>
 			<key>IOProbeScore</key>
-			<integer>20000</integer>
+			<integer>9999</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
-			<key>IOVARendererID</key>
+			<key>device-id</key>
 			<data>
 			rKcAAA==
 			</data>
-			<key>model</key>
-			<string>Raptor Lake-U</string>
+			<key>framebuffer-fbmem</key>
+			<data>
+			AACACQ==
+			</data>
+			<key>framebuffer-patch-enable</key>
+			<data>
+			AQAAAA==
+			</data>
+			<key>framebuffer-stolenmem</key>
+			<data>
+			AAAwAQ==
+			</data>
+		<key>model</key>
+		<string>Intel(R) UHD Graphics</string>
 		</dict>
 	</dict>
-	<key>MaxKernel</key>
-	<string></string>
-	<key>MinKernel</key>
-	<string>22.0.0</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
 	<key>OSBundleLibraries</key>
 	<dict>
 		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>597</string>
-		<key>com.apple.iokit.IOPCIFamily</key>
-		<string>2.9</string>
+		<string>500.0</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>22.6.6</string>
+		<string>10.0.0</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>22.6.6</string>
+		<string>10.0.0</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>22.6.6</string>
+		<string>10.0.0</string>
 		<key>com.apple.kpi.mach</key>
-		<string>22.6.6</string>
-		<key>com.apple.kpi.unsupported</key>
-		<string>22.6.6</string>
+		<string>10.0.0</string>
 	</dict>
+	<key>OSBundleRequired</key>
+	<string>Root</string>
 </dict>
 </plist>

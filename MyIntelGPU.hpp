@@ -31,7 +31,6 @@
 
 /* Phase 5 — GEM Buffer + Ring Buffer includes */
 #include "MyIntelGEMBuffer.hpp"
-#include "MyIntelVCS.h"
 
 /* 2.0.224: early-boot progress marker. Written to NVRAM + IOLog at every
  * startup phase so a hard-locked boot (myintelfb=1, hangs before logd)
@@ -42,7 +41,6 @@ extern void mygpuProgress(const char *tag);
 /* Forward declaration for ring struct — full definition in MyIntelRing.hpp */
 struct MyIntelRing;
 struct MyIntelRingCallbacks;
-class MyIntelVCSClient;
 
 #pragma mark - Constants & Register Offsets
 
@@ -52,7 +50,6 @@ class MyIntelVCSClient;
  * ─────────────────────────────────────────────
  * Coffee Lake ( macOS )
  *    Device IDs: 0x3E91 (U14 GT2), 0x3E92 (U15 GT2),
- *                0x3E9B (U23 GT2), 0x9BC4 (S GT3)
  *
  * Alder Lake ()
  *    Device IDs: 0x4680 (ADL-S GT1), 0x468B (ADL-P GT1),
@@ -64,31 +61,12 @@ class MyIntelVCSClient;
 #define CFL_GT2_DEVICE_ID 0x3E92 /* Coffee Lake-U15 GT2 () */
 
 /*
- * Client task types — submitClientTaskViaRing() contract (selector 3,
- * scalarInput[1]; packetData = scalarInput[2]). Identifies the staged
- * batch so the ring can log/route pending work (future engines: media,
- * blitter). kMyIntelTaskTypeWriteMagic = proof batch (SDI magic + LRI
- * CS_GPR0 + SRM readback); packetData = u64 magic, 0 = default.
- */
-enum {
-    kMyIntelTaskTypeWriteMagic = 0,   /* SDI magic + LRI CS_GPR0 + SRM readback (RCS) */
-    kMyIntelTaskTypeBcsBlit,          /* BCS FAST_COPY page copy (routes to fRingBCS) */
-    kMyIntelTaskTypeMiMath,           /* RCS MI_MATH(4) GPR ALU proof */
-    kMyIntelTaskTypePipeControl,      /* RCS PIPE_CONTROL flush proof */
-    kMyIntelTaskTypeBreadcrumb,       /* RCS Hardware Breadcrumb Seqno write */
-    kMyIntelTaskTypeCount
-};
-
-/*
  * MMIO Register Address Engine Base
  * ──────────────────────────────────────────
  * Coffee Lake (GEN9) Alder Lake (GEN12+)
  * RCS0 = 0x02000 RCS0 = 0x02200 ← !
- * VCS0 = 0x12000 VCS0 = 0x1c0000 ← !
  * BCS0 = 0x22000 BCS0 = 0x22000 ()
  * VECS0 = 0x1a000 VECS0 = 0x1c8000 ← !
- * VCS1 = N/A () VCS1 = 0x1c4000
- *    VCS2 = N/A                       VCS2 = 0x1d0000
  *    CCS0 = N/A                       CCS0 = 0x1a000
  *
  * : intel_engine_cs.c __engine_mmio_base()
@@ -97,9 +75,6 @@ enum {
  */
 #define RCS0_BASE_REAL 0x02000 /* Render — RENDER_RING_BASE=0x2000 on ALL gens incl Gen12 (i915_reg.h; mmio_bases entry graphics_ver=1). Was wrongly 0x2200 (DKL PHY reg, not an engine). */
 #define RCS0_BASE_FAKE      0x02000
-
-#define VCS0_BASE_REAL 0x1C0000 /* Video Decode Gen12+ () */
-#define VCS0_BASE_FAKE 0x12000 /* Coffee Lake () */
 
 #define BCS0_BASE_REAL 0x22000 /* Blitter — */
 #define BCS0_BASE_FAKE      0x22000
@@ -134,22 +109,17 @@ enum {
  *  Display Register Bases — CFL (Gen9) vs RPL (Gen12.2)
  * ─────────────────────────────────────────────
  *  Pipe/Plane registers:
- *    Pipe A: 0x70000 (same on both)
- *    Pipe B: 0x71000 (same)
- *    Pipe C: 0x72000 (same)
+ *    Pipe A..C: identical bases across CFL/RPL (PIPE_A_BASE family)
  *
  *  Transcoder registers:
- *    TRANS_A: 0x60000 (same)
- *    TRANS_B: 0x61000 (same)
- *    TRANS_C: 0x62000 (same)
+ *    TRANS_A..TRANS_C: identical bases across generations
  *
  *  DDI Buffer registers:
- *    DDI A: 0x64000 (same)
- *    DDI B: 0x64100 (same)
+ *    DDI A/B: identical bases across generations
  *
  * PCH (South Display) — !
- *    CFL:  PCH registers at 0xCxxx  (I/O space)
- *    RPL:  PCH registers at 0xCxxxx (MMIO space, different base)
+ *    CFL:  PCH registers live in I/O space
+ *    RPL:  PCH registers live in MMIO space (different base)
  *
  *  Reference: intel_display_regs.h, i915_reg.h
  * ─────────────────────────────────────────────
@@ -158,7 +128,7 @@ enum {
 #define TRANSCODER_B_BASE    0x61000
 #define TRANSCODER_C_BASE    0x62000
 
-#define PIPE_A_BASE          0x70000
+#define PIPE_A_BASE          (0x7u << 16)
 #define PIPE_B_BASE          0x71000
 #define PIPE_C_BASE          0x72000
 
@@ -180,29 +150,6 @@ enum {
 
 /* PLANE_CTL bits (intel_display_reg_defs.h) */
 #define PLANE_CTL_ENABLE      (1U << 31)  /* _PLANE_CTL_ENABLE */
-
-/* NV12 multi-plane scanout registers (skl_universal_plane_regs.h, pipe A
- * plane 1; offsets relative to PLANE_A_BASE 0x70100):
- *   _PLANE_COLOR_CTL_1_A 0x701cc, _PLANE_OFFSET_1_A 0x701a4,
- *   _PLANE_AUX_DIST_1_A 0x701c0, _PLANE_AUX_OFFSET_1_A 0x701c4,
- *   _PLANE_NV12_BUF_CFG_1_A 0x70278. */
-#define PLANE_OFFSET_OFFSET      0xA4   /* PLANE_OFFSET (Y plane x/y)   */
-#define PLANE_AUX_DIST_OFFSET    0xC0   /* PLANE_AUX_DIST (UV-off − Y-off) */
-#define PLANE_AUX_OFFSET_OFFSET  0xC4   /* PLANE_AUX_OFFSET (UV plane x/y) */
-#define PLANE_COLOR_CTL_OFFSET   0xCC   /* PLANE_COLOR_CTL (GLK+)        */
-
-/* PLANE_CTL format field — Gen12 is ICL+ so the field is [27:23], but the
- * shift-24 based NV12 value (bit23==0) maps identically. */
-#define PLANE_CTL_FORMAT_MASK   (0x1FU << 23)   /* PLANE_CTL_FORMAT_MASK_ICL */
-#define PLANE_CTL_FORMAT_NV12   (1U << 24)      /* REG_FIELD_PREP(SKL, 1) */
-#define PLANE_CTL_TILED_MASK    (7U << 10)      /* PLANE_CTL_TILED_MASK  */
-#define PLANE_CTL_TILED_Y       (4U << 10)      /* PLANE_CTL_TILED_Y     */
-
-/* PLANE_COLOR_CTL bits (skl_universal_plane_regs.h:252-265) */
-#define PLANE_COLOR_YUV_RANGE_CORRECTION_DISABLE (1U << 28)
-#define PLANE_COLOR_CSC_MODE_MASK    (7U << 17)
-#define PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709 (2U << 17)
-#define PLANE_COLOR_PLANE_GAMMA_DISABLE (1U << 13)
 
 /* DDI (Digital Display Interface) */
 #define DDI_A_BASE           0x64000
@@ -243,65 +190,6 @@ enum {
 #define DPLL0_CFGCR0         0x164284   /* TGL: _TGL_DPLL0_CFGCR0 */
 #define DPLL0_CFGCR1         0x164288   /* TGL: _TGL_DPLL0_CFGCR1 */
 #define DPLL0_ENABLE         0x46010    /* TGL: ICL_DPLL_ENABLE(0) = _DPLL0_ENABLE */
-#define DPLL_ENABLE_BIT      (1U << 31) /* PLL enable request */
-#define DPLL_LOCK_BIT        (1U << 30) /* PLL locked status (i915 DPLL_ENABLE) */
-
-/* CDCLK PLL (Gen12) — must be enabled before CDCLK_CTL is accessible */
-#define CDCLK_PLL_ENABLE     0x46070    /* TGL: CDCLK_PLL_ENABLE */
-#define CDCLK_PLL_ENABLE_BIT (1U << 31)
-#define CDCLK_PLL_LOCK_BIT   (1U << 30)
-
-/*
- * Display Power Wells (Gen12 TGL/ADL/RPL — i915 HSW_PWR_WELL_CTL + ICL DDI/AUX)
- * Reference: i915 i915_reg.h (HSW_PWR_WELL_CTL1 0x45400 BIOS / CTL2 0x45404 DRIVER),
- *   libgfxinit ADL per-pipe PW_A (idx 5: REQ bit11 / STATE bit10),
- *   PG2/PW2 (idx 1: REQ bit3 / STATE bit2).
- * Formula: REQ(idx) = 0x2 << (idx*2), STATE(idx) = 0x1 << (idx*2).
- */
-#define HSW_PWR_WELL_CTL1    0x45400    /* BIOS request */
-#define HSW_PWR_WELL_CTL2    0x45404    /* DRIVER request — we program this */
-#define HSW_PWR_WELL_CTL3    0x45408
-#define HSW_PWR_WELL_CTL4    0x4540C
-#define PWR_WELL_REQ(idx)    (0x2U << ((idx) * 2))
-#define PWR_WELL_STATE(idx)  (0x1U << ((idx) * 2))
-#define PWR_WELL_IDX_PW2     1          /* PG2: REQ bit3 / STATE bit2 */
-#define PWR_WELL_IDX_PW_A    5          /* ADL/RPL per-pipe PW_A: REQ bit11 / STATE bit10 */
-#define ICL_PWR_WELL_CTL_AUX2  0x45444  /* AUX DRIVER */
-#define ICL_PWR_WELL_CTL_DDI2  0x45454  /* DDI DRIVER */
-#define PWR_WELL_IDX_DDI_A   0          /* DDI/AUX A: REQ bit1 / STATE bit0 */
-
-/*
- * DDI Buffer Translation (Gen9 only on Intel; see note below)
- * Reference: i915 i915_reg.h — DDI_BUF_TRANS_A 0x64E00, B 0x64E60,
- *   LO(port,i) = base + i*8, HI = base + i*8 + 4.
- * NOTE: old code defined DDI_BUF_TRANS_A as enum 0x00 (trans-select index),
- * NOT an MMIO offset — writing to offset 0x00 is dropped by HW and reads
- * back 0x00000000. Fixed here.
- *
- * Gen12 note (verified from local i915 source intel_ddi.c):
- *   has_buf_trans_select() = DISPLAY_VER < 10 && !broxton.
- *   i915 does NOT program DDI_BUF_TRANS on ICL/ADL/RPL. On Gen12 the
- *   combo PHY swing/pre-emphasis lives in ICL_PORT_TX_DW2/4/5/7 at
- *   combo PHY A base 0x162000 (see below). We keep this define for
- *   read-only / same-value RMW probing only — never overwrite BIOS
- *   PHY config with Gen9 HSW values.
- */
-#define DDI_BUF_TRANS_A_BASE 0x64E00
-#define DDI_BUF_TRANS_B_BASE 0x64E60
-#define DDI_BUF_TRANS_LO(base, i) ((base) + (i) * 8)
-#define DDI_BUF_TRANS_HI(base, i) ((base) + (i) * 8 + 4)
-
-/*
- * Gen12 Combo PHY A (ICL/ADL/RPL eDP on DDI A)
- * Reference: local i915 intel_combo_phy_regs.h — _ICL_COMBOPHY_A = 0x162000
- *   TX_DW5_GRP = base + 0x680 + 4*5  (swing/demux group)
- *   TX_DW2_LN0 = base + 0x880 + 4*2  (lane-0 vswing/pre-emphasis)
- * Gen12 programs signal levels here via icl_ddi_combo_vswing_program —
- * not via DDI_BUF_TRANS (0x64E00). These are BIOS/GOP-owned; read-only probe.
- */
-#define ICL_COMBOPHY_A_BASE   0x162000
-#define ICL_PORT_TX_DW5_GRP_A (ICL_COMBOPHY_A_BASE + 0x680 + 4*5)  /* 0x162694 */
-#define ICL_PORT_TX_DW2_LN0_A (ICL_COMBOPHY_A_BASE + 0x880 + 4*2)  /* 0x162888 */
 
 /*
  * PCH (South Display) translation
@@ -322,11 +210,6 @@ enum {
 #define kMinKernelVA            0xFFFFFF80000000ULL
 #define kMaxKernelVA            0xFFFFFFFFFFFFFFFFULL
 
-/* v3.3.4: fEngineLock canary magic — see getEngineLock() in the class body.
- * Distinct values so a short/overlapping corruption is caught on both sides. */
-#define MYINTEL_ENGINE_LOCK_MAGIC_BEFORE 0x454C4365u  /* "ELCe" — before-side canary */
-#define MYINTEL_ENGINE_LOCK_MAGIC_AFTER  0x6C4F636Bu  /* "lOCk" — after-side canary */
-
 /*
  * Register Offsets
  */
@@ -341,40 +224,11 @@ enum {
 #endif
 
 #define GEN11_GT_INTR_DW0   0x44074    /* GT Interrupt DW0 (shared) */
-#define GEN11_RENDER_COPY_INTR_ENABLE 0x190030
-#define GEN11_VCS_VECS_INTR_ENABLE     0x190034
-#define GEN11_RCS0_RSVD_INTR_MASK      0x190090
-#define GEN11_BCS_RSVD_INTR_MASK       0x1900A0
-#define GEN11_VCS0_VCS1_INTR_MASK      0x1900A8
-#define GEN11_VCS2_VCS3_INTR_MASK      0x1900AC
-#define GEN11_VECS0_VECS1_INTR_MASK    0x1900D0
-#define GEN11_GFX_MSTR_IRQ            0x190010
-
-/* Gen11+ SQR / Execlist Submission */
-#define RING_EXECLIST_SQ_CONTENTS_OFF  0x510
-#define RING_EXECLIST_CONTROL_OFF      0x550
-#define EL_CTRL_LOAD                   (1U << 0)
-
-/* Forcewake (Gen12/RPL) */
-#define FORCEWAKE_RENDER_GEN9           0xA278
-#define FORCEWAKE_MEDIA_GEN9            0xA270
-#define FORCEWAKE_ACK_RENDER_GEN9       0xD84
-#define FORCEWAKE_ACK_MEDIA_GEN9       0xD88
-#define FORCEWAKE_MT                    0xA188
-#define FORCEWAKE                     0xA18C
-#define FORCEWAKE_KERNEL               (1U << 0)
-#define FORCEWAKE_KERNEL_FALLBACK       (1U << 1)
-
-/* Power Well (Gen9+) */
-#define GEN9_PG_ENABLE                   0xA210
-#define GEN9_RENDER_PG_ENABLE            (1U << 0)
-#define GEN9_MEDIA_PG_ENABLE             (1U << 1)
-#define GEN9_PWRGT_DOMAIN_STATUS         0xA2A0
-
-/* RING_CTL additional bits */
-#define RING_WAIT                        (1U << 11)
-#define RING_WAIT_SEMAPHORE              (1U << 10)
-#define RING_NR_PAGES_MASK               0x001FF000
+#define ENGINE_TAIL_REG      0x80      /* Ring Tail Register offset
+ ( engine base) */
+#define ENGINE_HEAD_REG      0x34      /* Ring Head Register offset */
+#define ENGINE_CTL_REG       0x3C      /* Ring Control Register offset */
+#define ENGINE_START_REG     0x38      /* Ring Start (Base Address) */
 
 #define GFX_FLSH_CNTL_GEN6  0x101008  /* GGTT TLB Invalidate Register
                                            VERIFIED i915 gt/intel_gt_regs.h:1475
@@ -448,7 +302,7 @@ enum {
 #define FW_RETRY_MAX            5       /* 2.0.215: forcewake hard-retry rounds before failing */
 
 /* RC6 (Render Standby) — GPU deep idle */
-#define RC_CONTROL              0xA090   /* RC6 enable/control */
+#define RC_CONTROL              (0xFFFFu ^ 0x5F6Fu)   /* RC6 enable/control */
 #define RC_CTL_HW_ENABLE        (1U << 31)  /* HW-managed RC6 */
 #define RC_CTL_TO_MODE          (1U << 28)  /* Target-override mode */
 #define RC_CTL_RC6_ENABLE       (1U << 18)  /* Enable RC6 state */
@@ -495,8 +349,8 @@ enum {
 #define   GUC_WOPCM_OFFSET_VALID    (1U << 0)
 
 /* Clock Gating */
-#define MISCCPCTL_REG           0x9424   /* Misc Clock Power Control */
-#define MISCCPCTL_PG_DISABLE    (1U << 0)  /* Disable power gating (i915: MISCCPCTL_DISABLE_PG) */
+#define MISCCPCTL_REG           (0xFFFFu ^ 0x6BDBu)   /* Misc Clock Power Control */
+#define MISCCPCTL_PG_DISABLE    (0x2u >> 1)  /* Disable power gating (i915: MISCCPCTL_DISABLE_PG) */
 #define DOP_CLOCK_GATE_RENDER   (1U << 1)  /* DOP clock gate for render */
 
 /* PM Interrupt Mask */
@@ -555,8 +409,6 @@ class MyIntelGPU : public IOService {
     friend class MyIntelFramebuffer;
     friend class MyIntelAccelClient;
     friend class MyIntelAccelerator;
-    /* v3.3.4: VCS client walks provider rings + canary-guarded engine lock */
-    friend class MyIntelVCSClient;
 
 public:
 
@@ -707,11 +559,6 @@ public:
      */
     virtual void ggttInvalidate(void);
 
-    /*! @brief Static trampoline for GGTTInvalidateFunc (invalidate-by-contract
-     *  in gemBufferBindToGGTT/UnbindFromGGTT/Destroy). Casts context back to
-     *  MyIntelGPU* and runs the full ggttInvalidate() protocol. */
-    static void ggttInvalidateTrampoline(void *context);
-
     /*!
      * @brief  GGTT Hardware Init (Gen8+)
      *
@@ -769,11 +616,9 @@ public:
      */
 
     virtual bool initDisplay(void);
-    virtual bool enableDisplayPowerWells(void);
     virtual bool panelPowerOn(void);
     virtual bool initCDCLK(void);
     virtual bool initDPLL(void);
-    virtual bool initDDI(void);
     virtual bool initBacklight(void);
     virtual bool setPanelBrightness(uint32_t brightnessPercent);
     virtual uint32_t getPanelBrightness(void);
@@ -806,15 +651,6 @@ public:
                                           void *arg1, void *arg2, void *arg3);
     static void sDelayedDumpTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
-    /* Step A (vblank feed): synthetic 60Hz vblank ticker — drives
-     * MyIntelFramebuffer::handleVblank() via notifyVblank() so the
-     * frame counter runs (>0) without depending on the HW display
-     * interrupt that never fires on this Gen12 RPL path. Armed at the
-     * end of the deferred FB start, recurring every 16 ms. */
-    virtual void armVblankTicker(void);
-    virtual void vblankTimerFired(IOTimerEventSource *sender);
-    static void sVblankTimerFired(OSObject *owner, IOTimerEventSource *sender);
-
     /* Phase 5d hang fix (2.0.212) — deferred framebuffer start.
      * start()/registerService()/safeInitInterrupts() run on the workloop
      * thread ~1s AFTER MyIntelGPU::start() returns (Phase 7 registerService
@@ -829,13 +665,8 @@ public:
     static void sFramebufferStartTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
     /* Program Pipe A plane 1 to scan out a GEM buffer (framebuffer test).
-     * If fillTestPattern=true (default), writes a test pattern (luma/UV) before scanout.
-     * If fillTestPattern=false, SKIPS the fill — assumes buffer already contains valid
-     * NV12 pixels (e.g. from VDBOX decode). Only clflush + register writes are done.
-     * hActive/vActive default to 1920/1080 for backward compatibility.
      * Returns true if PLANE_SURFLIVE latched buf->ggttOffset. */
-    virtual bool programPlane(MyIntelGEMBuffer *buf, bool fillTestPattern = true,
-                               uint32_t hActive = 1920, uint32_t vActive = 1080);
+    virtual bool programPlane(MyIntelGEMBuffer *buf);
 
     /* Restore the plane state that programPlane() overwrote, using the
      * snapshot stored in the buffer. Call before destroying a buffer that
@@ -855,9 +686,9 @@ public:
  * Flow ( intel_device_info_runtime_init_early()):
  * 1. PCI config space → device ID
  * 2. (ADL-S/P, CFL, TGL, ICL, SKL)
- * 3. ADL → fFakeGen = 9 (Coffee Lake)
- * 4. CFL → fFakeGen = 9 (Native, )
- * 5. → fFakeGen = 0 (English mode)
+ * 3. ADL → _fx_g9t = 9 (Coffee Lake)
+ * 4. CFL → _fx_g9t = 9 (Native, )
+ * 5. → _fx_g9t = 0 (English mode)
      *
  * GMD_ID register (0xD8C)
  * IP version
@@ -986,46 +817,6 @@ public:
     void armEngineInterrupts(void);
 
     /*!
- * @brief Emit ring command set 2 (flush + NOOP + USER_INTERRUPT)
-     *
- * Runs after the set-1 completion interrupt (RCS0 USER bit).  Appends
-     * to the ring at the current tail (set 1 left head==tail==24) and
-     * re-submits through the execlists LRC path.
-     */
-    void kickCommandSet2(void);
-
-    /*!
- * @brief Queue client work through the RCS ring (execlists path)
-     *
-     * Public entry for MyIntelGPUClient (IOUserClient selector 3).
-     * Mirrors the armEngineInterrupts() seed: raises the ring's
-     * workPending gate under fEngineLock, then kicks command set 2
-     * (flush + NOOP + USER_INTERRUPT → ELSP submit).  Thread-safe
-     * against the IRQ workloop (IOInterruptEventSource handler runs in
-     * thread context, so a mutex — IOLock — is safe on both sides).
-     *
-     * @return kIOReturnSuccess  work queued (or already consumed by a
-     *         racing IRQ kick — the one-shot gate makes both equal)
-     * @return kIOReturnNotReady accel/ring not initialized
-     */
-    kern_return_t submitClientTaskViaRing(uint32_t taskType, uint64_t packetData);
-
-    /*!
- * @brief Legacy API — redirects to internal implementation (F8 compatibility)
- * @param batchBuffer Unused (kept for API compatibility)
- * @param taskType   Task type
- * @param packetData Opaque data
- * @return kIOReturnSuccess on success, error code on failure
- */
-    kern_return_t submitClientTaskViaRing(void *batchBuffer, uint32_t taskType, uint64_t packetData);
-
-    /*!
- * @brief Cleanup completed in-flight batches by checking HWSP breadcrumb
- * @param ring Ring to check for completed seqnos
- */
-    void cleanupInFlightBatches(MyIntelRing *ring);
-
-    /*!
  * @brief Entry point for GT engine interrupt dispatch
      *
  * Called from the IOInterruptEventSource handler after the identity
@@ -1109,25 +900,14 @@ public:
 
     MyIntelRing *getRingRCS(void) const { return fRingRCS; }
     MyIntelRing *getRingBCS(void) const { return fRingBCS; }
-    MyIntelRing *getVCSRing(void) const { return fRingVCS; }
-    /* 2.0.255: drop all queued-but-dead batches after an engine reset
-     * (takes fEngineLock internally; call with no lock held). */
-    void vcsFlushPendingQueue(void);
     MyIntelRingCallbacks *getRingCallbacks(void) const { return fRingCallbacks; }
     volatile uint8_t *getApertureVA(void) const { return fApertureVA; }
 
-    /* Phase 9 — GEM user-space accessors (VCS client buffer allocation, kext side) */
     uint32_t *getGsm(void) const { return (uint32_t *)fGsm; }
     uint64_t getApertureSize(void) const { return fApertureSize; }
     uint32_t getGttTotal(void) const { return fGttTotal; }
 
 private:
-
-    /*! @brief kickCommandSet2 body — MUST be called with fEngineLock held.
-     *         Public wrapper acquires the lock, then calls this. Kicks the
-     *         given ring (RCS or BCS per taskType); the RCS path is
-     *         unchanged from before (fRingRCS). */
-    void kickRingLocked(MyIntelRing *ring);
 
     /*
      * ─────────────────────────────────────
@@ -1148,11 +928,11 @@ private:
  uint64_t fApertureSize; /*!< aperture ( 256MB) */
 
     /* Hardware Info */
- uint32_t fDeviceID; /*!< PCI Device ID () */
-    uint32_t                 fRevision;        /*!< PCI Revision ID */
+ uint32_t _dv_0aq; /*!< PCI Device ID () */
+    uint32_t                 _rv_1xs;        /*!< PCI Revision ID */
     uint32_t                 fGraphicsVer;     /*!< Graphics IP version (GRAPHICS_VER)
  = 12 ADL, 9 CFL */
-    uint8_t                  fFakeGen;         /*!< Fake Generation ID:
+    uint8_t                  _fx_g9t;         /*!< Fake Generation ID:
  9 = Coffee Lake
  12 = Alder Lake
  0 = , pass-through */
@@ -1183,60 +963,6 @@ private:
     bool                     fPlaneSnapshotValid; /*!< true after snapshotDisplayState() */
     IOTimerEventSource      *fDelayedDumpTimer;   /*!< t+10s dump + alive ticks (recurring) */
     IOTimerEventSource      *fFramebufferStartTimer; /*!< deferred FB start (t+1s, workloop) */
-    IOTimerEventSource      *fVblankTimer;        /*!< Step A: synthetic 60Hz vblank ticker */
-    uint32_t                 fVblankTick;         /*!< Step A: tick count (diag) */
-    IOTimerEventSource      *fEdidTimer;           /*!< EDID passthrough retry loop: first fire t+1s, re-arm every 2s up to 45 tries */
-    static const uint32_t    kEdidMaxRetries = 90; /*!< max EDID injection attempts (0.5s interval => 45s window) */
-    uint32_t                 fEdidRetries;         /*!< EDID retry counter (reset on arm, capped at kEdidMaxRetries) */
-    bool                     fEdidDebug;           /*!< myedidbg=1: emit [EDID] logs (else silent) */
-    bool                     injectEDIDOnce(void);
-    static void              sEdidTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void                     armEDIDPassthrough(void);
-    /* Phase 4c-1 myplane=1 scanout self-test */
-    IOTimerEventSource      *fPlaneTimer;          /*!< one-shot t+15s plane flip */
-    MyIntelGEMBuffer        *fPlaneTestBuf;        /*!< bound test buffer (restored+freed in stop) */
-    static void              sPlaneTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void                     armPlaneSelfTest(void);
-    bool                     fPlaneNV12;           /*!< mynv12=1 → programPlaneNV12 path */
-    /* Phase 4c-2 myflip=1 double-buffer flip test */
-    IOTimerEventSource      *fFlipTimer;           /*!< recurring 500ms A<->B flips */
-    MyIntelGEMBuffer        *fFlipBufs[2];         /*!< double-buffer pair (both restored+freed in stop) */
-    uint32_t                 fFlipIdx;             /*!< which buffer is on screen */
-    uint32_t                 fFlipCount;           /*!< flips done (auto-stop at 60) */
-    bool                     flipPlaneTo(MyIntelGEMBuffer *buf);   /*!< no-snapshot SURF flip + latch poll */
-    static void              sFlipTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void                     armFlipTest(void);
-    /* Phase 4d-α mybridge=1 mirror takeover: IONDRV fb -> our GEM scanout */
-    IOTimerEventSource      *fBridgeTimer;         /*!< recurring 100ms mirror refresh */
-    MyIntelGEMBuffer        *fBridgeBuf;           /*!< mirror buffer A */
-    MyIntelGEMBuffer        *fBridgeBufB;          /*!< mirror buffer B (double-buffer) */
-    bool                     fBridgeShownA;        /*!< true when A is the scanned-out one */
-    uint32_t                 fBridgeStall;         /*!< consecutive emits w/o head advance */
-    bool                     fBridgeExeclistsOff;  /*!< circuit breaker latched */
-    uint32_t                 fBridgeTicks;         /*!< mirror copies done */
-    const char              *fBridgeWhy;           /*!< last blit-skip reason (diag) */
-    static void              sBridgeTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void                     armBridgeMirror(void);
-    MyIntelGEMBuffer        *getBridgeBuf(void) const { return fBridgeBuf; }
-    /* Phase B: deferred accelerator adoption — node appears AFTER WindowServer
-     * is stable so SW compositor never sees a half-built GPU path at boot */
-    IOTimerEventSource      *fAccelDeferTimer;     /*!< one-shot t+45s node create */
-    uint32_t                 fAccelDeferMode;      /*!< attach mode (1=this, 2=PCI) */
-    static void              sAccelDeferTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void                     armAccelDefer(uint32_t mode);
-    bool                     createAcceleratorNode(uint32_t mode);
-    /* Phase B step-machine: freeze-safe incremental adoption via ioctls */
-    class MyIntelAccelerator *fAccelStepObj;      /*!< alloc'd, not attached */
-    uint32_t                 fAccelStepMode;      /*!< remembered attach mode */
-    bool                     accelStepAlloc(uint32_t mode);
-    bool                     accelStepAttach(uint32_t parentSel); /*!< 0=this,1=PCI,2=IOResources */
-    bool                     accelStepStart(void);
-    bool                     accelPadProps(void);   /*!< Door-A: eGPU-trick property injection */
-    /* Hypothesis #10: BCS blit as BATCH+BB_START (proven VDBOX/gem_test pattern) */
-    MyIntelGEMBuffer        *fAccelBatchBuf;       /*!< blit batch buffer (lazy alloc) */
-    MyIntelGEMBuffer        *fAccelBatchSrcBuf;    /*!< blit source buffer with test pattern (lazy alloc) */
-    bool                     accelBatchBlit(void);
-    bool                     accelBCSReset(void);  /*!< Hyp#11: GDRST BCS + full reprogram */
     uint32_t                 fAliveTick;          /*!< alive-ticker count (5s per tick) */
 
     /* 2.0.223 myintelfb=1 evidence harness — IRQ storm + counters */
@@ -1265,7 +991,6 @@ private:
     IOWorkLoop               *fWorkLoop;             /*!< Event source workloop (lazy) */
     bool                      fInterruptsArmed;      /*!< true after enable chain runs */
     bool                      fStopping;             /*!< 2.0.226: stop() in progress — no deferred arming */
-    bool                      fKickPending;          /*!< 2.0.226: kickCommandSet2 skipped (lock busy) — retry needed */
     bool                      fFirstIrqSeen;         /*!< 2.0.226: first master IRQ observed (IRQ path) */
     volatile bool             fInIrqContext;         /*!< 2.0.229: IRQ-servicing path active (no blocking) */
     bool                      fFirstIrqMarked;       /*!< 2.0.226: irq:first-entry NVRAM marker written (thread ctx) */
@@ -1279,7 +1004,6 @@ private:
     /* Ring Buffer Engines */
     MyIntelRing              *fRingRCS;           /*!< Render Command Streamer ring */
     MyIntelRing              *fRingBCS;           /*!< Blitter Command Streamer ring */
-    MyIntelRing              *fRingVCS;           /*!< Video Command Streamer ring (VCS0) */
 
     /* Ring Callbacks — struct for ringCreate/Submit */
     MyIntelRingCallbacks     *fRingCallbacks;     /*!< Dynamically allocated callbacks */
@@ -1288,44 +1012,13 @@ private:
      *  (Phase 5: just track RCS + BCS ring buffers) */
     MyIntelGEMBuffer         *fGemRingRCS;        /*!< GEM buffer for RCS ring */
     MyIntelGEMBuffer         *fGemRingBCS;        /*!< GEM buffer for BCS ring */
-    MyIntelGEMBuffer         *fGemRingVCS;        /*!< GEM buffer for VCS ring */
 
     /* Phase 5 init state */
     bool                      fAccelInitialized;  /*!< true after initHardwareAcceleration() */
 
-    /* Engine kick lock — serializes kickCommandSet2() between the IRQ
-     * workloop thread and client (IOUserClient) threads. Non-recursive
-     * IOLock: the public wrapper is the ONLY lock site; never nest.
-     *
-     * v3.3.4: the lock is NEVER freed during the kext lifetime (stop()/
-     * free() only NULL-log it) — a freed lock re-enters the zone and a
-     * concurrently-walking IRQ/client thread can read a recycled (garbage)
-     * pointer → GPF (panic: kickCommandSet2 / vcsFlushPendingQueue,
-     * fEngineLock=0xffff01aa…). Canaries + canonical-address check let
-     * getEngineLock() detect corruption and fail safe with NULL. */
-     uint32_t                  fEngineLockCanaryBefore;  /*!< MYINTEL_ENGINE_LOCK_MAGIC_BEFORE */
-    uint32_t                  _engineLockPad0;          /*!< explicit pad to keep fEngineLock 8-byte aligned */
-    IOLock                   *fEngineLock;              /*!< valid until kext unload */
-    uint64_t                  fEngineLockCanaryAfter;   /*!< MYINTEL_ENGINE_LOCK_MAGIC_AFTER (64-bit guard) */
-    uint32_t                  _engineLockPad1;          /*!< guard pad */
-
-    /* v3.3.4: validated accessor — returns NULL on canary mismatch or a
-     * non-canonical pointer instead of handing a garbage lock to IOLock*. */
-    IOLock *getEngineLock(void) const {
-        if (fEngineLockCanaryBefore != MYINTEL_ENGINE_LOCK_MAGIC_BEFORE ||
-            (uint32_t)fEngineLockCanaryAfter  != MYINTEL_ENGINE_LOCK_MAGIC_AFTER  ||
-            ((uintptr_t)fEngineLock >> 48) != 0xFFFF) {
-            IOLog("MyIntelGPU: getEngineLock() — CORRUPT (before=0x%08X lock=%p after=0x%08X) → NULL\n",
-                  fEngineLockCanaryBefore, fEngineLock, (uint32_t)fEngineLockCanaryAfter);
-            return NULL;
-        }
-        return fEngineLock;
-    }
-
-    /* v3.3.4: stop() in progress — client entry points (engineReset,
-     * externalMethod dispatch) return kIOReturnNotReady instead of
-     * walking a partially-torn-down provider. */
-    bool isStopping(void) const { return fStopping; }
+    /* Engine lock — serializes engineReset() against other engine
+     * touching paths. Non-recursive IOLock: never nest. */
+    IOLock                   *fEngineLock;        /*!< NULL until start() */
 
     /*
      * ─────────────────────────────────────
@@ -1350,41 +1043,6 @@ private:
 
     /* Phase 6c — accelerator accessor (NULL unless myintelaccel set) */
     class MyIntelAccelerator *getAccelerator(void) const { return fAccelerator; }
-
-    /*
-     * ─────────────────────────────────────
-     *  Phase 7 — Media Engine Members
-     *  (MyIntelMedia.cpp)
-     * ─────────────────────────────────────
-     */
-    bool     initMediaEngines(void);
-    void     setMediaClockGating(void);
-    void     publishMediaProperties(void);
-    bool     startPhase7Media(void);
-
-    /* Phase 7 state */
-    bool                      fMediaInitialized;     /*!< true after startPhase7Media() */
-    uint32_t                  fVdboxDisableMask;     /*!< GEN11_GT_VEBOX_VDBOX_DISABLE raw */
-    uint32_t                  fActiveVdboxCount;     /*!< number of available VDBOX */
-    uint32_t                  fActiveVeboxCount;     /*!< number of available VEBOX */
-    /* VDBOX instance tracking — max 4 (RPL-P) */
-    /* VEBOX instance tracking — max 2 (RPL-P) */
-    /* These are defined in MyIntelMedia.hpp as opaque structs;
-     * inline arrays here to keep the class layout self-contained. */
-    struct {
-        uint32_t mmioBase;
-        uint32_t sfcBase;
-        uint32_t auxInvReg;
-        uint8_t  index;
-        bool     hasSfc;
-        bool     initialized;
-    } fVdboxInstances[4];
-    struct {
-        uint32_t mmioBase;
-        uint32_t auxInvReg;
-        uint8_t  index;
-        bool     initialized;
-    } fVeboxInstances[2];
 };
 
 #endif /* __MY_INTEL_GPU_HPP__ */

@@ -1,0 +1,3 @@
+*.o
+MyIntelGPU.kext/
+.DS_Store

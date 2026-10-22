@@ -1,0 +1,15 @@
+#!/bin/bash
+KEXT="/Library/Extensions/MyIntelGPU.kext"
+
+# Ownership/permissions required by kextload
+/usr/sbin/chown -R root:wheel "$KEXT"
+/bin/chmod -R 755 "$KEXT"
+
+# Rebuild AuxiliaryKernelCollection so the kext loads on next boot
+if [ -x /usr/bin/kmutil ]; then
+    /usr/bin/kmutil install --volume-root / || /sbin/kextcache -u / || \
+        echo "WARNING: auxKC rebuild failed — run 'sudo kmutil install --volume-root /' manually"
+fi
+
+echo "MyIntelGPU.kext installed. Reboot to load."
+exit 0

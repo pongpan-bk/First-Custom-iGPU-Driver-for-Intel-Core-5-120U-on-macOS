@@ -1,0 +1,8 @@
+#!/bin/bash
+# Back up any existing kext before the payload overwrites it (iron rule: always back up)
+if [ -d "/Library/Extensions/MyIntelGPU.kext" ]; then
+    TS=$(date +%Y%m%d-%H%M%S)
+    /bin/cp -aR "/Library/Extensions/MyIntelGPU.kext" "/Library/Extensions/MyIntelGPU.kext.bak-${TS}"
+    echo "Backed up existing kext -> MyIntelGPU.kext.bak-${TS}"
+fi
+exit 0
