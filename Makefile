@@ -168,7 +168,7 @@ PLUGIN_BUNDLE := MyIntelGPUMTLDriver.bundle
 KEXT_PLUGINS  := $(TARGET).kext/Contents/PlugIns
 PLUGIN_DEST   := $(KEXT_PLUGINS)/$(PLUGIN_BUNDLE)
 
-.PHONY: all clean install load unload lint format version strip_binary tools FORCE
+.PHONY: all clean install load unload lint format version strip_binary tools pkg FORCE
 
 .DEFAULT_GOAL := all
 
@@ -265,3 +265,23 @@ sizecheck:
 	else \
 		echo "Size check: $$actual bytes (limit $$maxsize) — OK"; \
 	fi
+
+# ─── Installer Package (.pkg) ────────────────────────────────────
+# pkgbuild --ownership recommended assigns root:wheel to payload items
+# installed under /Library — required for kext loading. packaging/ holds
+# preinstall (backup existing kext) and postinstall (chown + kmutil).
+PKG_IDENTIFIER := com.pongpan-bk.MyIntelGPU
+PKG_NAME       := $(TARGET)-$(STAMPED_VERSION).pkg
+
+pkg: all
+	@echo "─── Building installer package: $(PKG_NAME)"
+	/usr/bin/pkgbuild \
+		--root "$(TARGET).kext" \
+		--scripts packaging \
+		--identifier $(PKG_IDENTIFIER) \
+		--version "$(STAMPED_VERSION)" \
+		--install-location /Library/Extensions \
+		--ownership recommended \
+		"$(PKG_NAME)"
+	@ls -la "$(PKG_NAME)"
+	@echo "─── Package complete: $(PKG_NAME)"

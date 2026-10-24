@@ -36,3 +36,13 @@ jobs:
           name: MyIntelGPU-kext-${{ steps.ver.outputs.version }}
           path: MyIntelGPU.kext/
           if-no-files-found: error
+
+      - name: Build installer pkg
+        run: make pkg
+
+      - name: Upload pkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyIntelGPU-pkg-${{ steps.ver.outputs.version }}
+          path: "MyIntelGPU-*.pkg"
+          if-no-files-found: error
