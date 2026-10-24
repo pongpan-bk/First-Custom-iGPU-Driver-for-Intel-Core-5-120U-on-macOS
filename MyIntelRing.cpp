@@ -57,6 +57,7 @@ static const char *engineName(MyIntelEngineType type)
     switch (type) {
         case kMyIntelEngineRCS:  return "RCS";
         case kMyIntelEngineBCS:  return "BCS";
+        case kMyIntelEngineVCS:  return "VCS";
         case kMyIntelEngineVECS: return "VECS";
         default:                 return "???";
     }
@@ -64,7 +65,7 @@ static const char *engineName(MyIntelEngineType type)
 
 /* Forward declarations (defined below ringCreate) */
 static bool lrcBuildContext(MyIntelRing *ring);
-static bool lrcBuildContextXcs(MyIntelRing *ring);
+bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset);
 static void lrcUpdateRingRegs(MyIntelRing *ring);
 
 /*
@@ -216,7 +217,7 @@ MyIntelRing *ringCreate(
     }
 
     if (head_retry <= 0) {
-        RING_DEBUG_RAW("peetalog::[Hardware Error] RING_HEAD write failed to stick! Engine stuck in deep RC6");
+        RING_DEBUG_RAW("RING_HEAD write failed to stick! (deep RC6)");
         if (fwHeld) cb->fwPut(cb->context);
         cb->gemFree(cb->context, gemBuf);
         IOFree(ring, sizeof(MyIntelRing));
@@ -322,10 +323,10 @@ MyIntelRing *ringCreate(
         uint32_t execStatusHi = cb->readReg32(cb->context, base + RING_EXECLIST_STATUS_HI_OFFSET);
         uint32_t sqContents0  = cb->readReg32(cb->context, base + RING_EXECLIST_SQ_CONTENTS_OFFSET);
         uint32_t sqContents1  = cb->readReg32(cb->context, base + RING_EXECLIST_SQ_CONTENTS_OFFSET + 4);
-        RING_DEBUG_RAW("ringCreate: EXECLIST_STATUS_LO=0x%08X HI=0x%08X (active=%u pend=%u load=%u)",
+        RING_DEBUG_RAW("ringCreate: EXECLIST_LO=%X HI=%X act=%u pend=%u load=%u",
                        execStatusLo, execStatusHi,
                        (execStatusLo >> 0) & 1u, (execStatusLo >> 1) & 1u, (execStatusLo >> 2) & 1u);
-        RING_DEBUG_RAW("ringCreate: EXECLIST_SQ_CONTENTS[0]=0x%08X [1]=0x%08X (desc=0x%016llX)",
+        RING_DEBUG_RAW("ringCreate: EXECLIST_SQ[0]=%X [1]=%X desc=%016llX",
                        sqContents0, sqContents1,
                        ((uint64_t)sqContents1 << 32) | sqContents0);
     }
@@ -364,7 +365,7 @@ MyIntelRing *ringCreate(
              * written to the execlist (CTX_RING_CTL | RING_VALID), not by
              * RING_CTL. Log + continue; the submit path checks lrcInited.
              */
-            RING_DEBUG_RAW("ringCreate: RING_CTL_VALID not set via MMIO (expected on Gen12+, execlists mode), continuing");
+            RING_DEBUG_RAW("ringCreate: RING_CTL_VALID unset (Gen12+ execlists), continuing");
         } else {
             RING_TRACE("RING_CTL = 0x%08X (VALID set via MMIO — legacy path active)", ctlValue);
         }
@@ -384,6 +385,7 @@ MyIntelRing *ringCreate(
     ring->emit = 0;
     ring->space = ringSize - RING_MIN_FREE_SPACE;
     ring->lastTail = 0;
+    ring->workPending = false;
 
     cb->writeReg32(cb->context, base + RING_TAIL_REG_OFFSET, 0);
     cb->readReg32(cb->context, base + RING_TAIL_REG_OFFSET);
@@ -406,18 +408,24 @@ MyIntelRing *ringCreate(
         ring->lrcVaddr = (uint32_t *)cb->gemGetVAddr(cb->context, ring->lrcGemBuf);
         RING_DEBUG_RAW("ringCreate: LRC context @ ggtt=0x%X vaddr=%p size=0x%X",
                        ring->lrcGgtt, ring->lrcVaddr, LRC_CONTEXT_SIZE);
-        if (ring->engineType == kMyIntelEngineBCS ||
-            ring->engineType == kMyIntelEngineVECS) {
-            /* 2.0.250: i915 gen12 uses the XCS register image (52 dw,
-             * gen12_xcs_offsets) for EVERY engine except RENDER — the RCS
-             * 185-dword image carries render-only regs that don't exist
-             * on the other engines. */
-            if (lrcBuildContextXcs(ring)) {
-                ring->lrcInited = true;
+        if (lrcBuildContext(ring)) {
+            ring->lrcInited = true;
+
+            /* Context runs in 4-level PPGTT (LEGACY_64B): the indirect
+             * BB fetch walks PPGTT, but only batch pages were mapped.
+             * Map ALL LRC pages into the identity window or the restore
+             * fetch faults on not-present (ESR bit0, head frozen). */
+            const uint64_t *lrcPhys =
+                cb->gemGetPagesPhys(cb->context, ring->lrcGemBuf);
+            if (lrcPhys &&
+                lrcMapBatchPages(ring, ring->lrcGgtt, lrcPhys,
+                                 LRC_CONTEXT_SIZE / GEM_PAGE_SIZE)) {
+                RING_DEBUG_RAW("ringCreate: LRC %u pages mapped into PPGTT",
+                               LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
             } else {
-                RING_DEBUG_RAW("ringCreate: WARNING — XCS LRC image build failed, using legacy submit");
+                RING_DEBUG_RAW("ringCreate: WARNING — LRC PPGTT map failed "
+                               "(indirect BB will fault)");
             }
-        } else if (lrcBuildContext(ring)) {
             ring->lrcInited = true;
         } else {
             RING_DEBUG_RAW("ringCreate: WARNING — LRC image build failed, using legacy submit");
@@ -561,6 +569,7 @@ bool ringReset(MyIntelRing *ring, MyIntelRingCallbacks *cb)
     ring->emit = 0;
     ring->space = ring->size - RING_MIN_FREE_SPACE;
     ring->lastTail = 0;
+    ring->workPending = false;
 
     /* Write tail */
     cb->writeReg32(cb->context, base + RING_TAIL_REG_OFFSET, 0);
@@ -902,35 +911,36 @@ static bool lrcBuildContext(MyIntelRing *ring)
     /* init_common_regs(): bb_offset slot = 0 */
     state[CTX_BB_OFFSET] = 0;
 
-    OSSynchronizeIO();
+OSSynchronizeIO();
 
-    RING_DEBUG_RAW("lrcBuildContext: state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X",
-                   LRC_STATE_OFFSET, ring->ggttOffset, ring->size,
+    RING_DEBUG_RAW("lrcBuildContext: RCS state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X",
+                   LRC_RCS_OFFSET, ring->ggttOffset, ring->size,
                    state[CTX_RING_CTL], state[CTX_CONTEXT_CONTROL]);
+
+    /* ── F9: Build XCS engine contexts (VCS, VECS, BCS, CCS) ──
+     * Each XCS engine gets its own 4KB page in the LRC context image.
+     * The XCS context layout is identical for all XCS engines (52 dwords).
+     */
+    if (!lrcBuildContextXcsAt(ring, LRC_VCS_OFFSET))  return false;  /* VCS  */
+    if (!lrcBuildContextXcsAt(ring, LRC_VECS_OFFSET)) return false;  /* VECS */
+    if (!lrcBuildContextXcsAt(ring, LRC_BCS_OFFSET))  return false;  /* BCS  */
+    if (!lrcBuildContextXcsAt(ring, LRC_CCS_OFFSET))  return false;  /* CCS  */
+
+    RING_DEBUG_RAW("lrcBuildContext: full LRC built @%p size=0x%X (RCS+VCS+VECS+BCS+CCS)",
+                   ring->lrcVaddr, LRC_CONTEXT_SIZE);
     return true;
 }
 
 /*
  * ─────────────────────────────────────────────
- *  lrcBuildContextXcs — Build the Gen12 XCS (BCS) LRC image
+ *  lrcBuildContextXcsAt — Build XCS context at specific offset
  * ─────────────────────────────────────────────
- *  Fills the LRC context object with the gen12_xcs_offsets register stream
- *  (intel_lrc.c:227-257) — VERBATIM, 52 dwords = LRC_STATE_DWORDS_XCS:
- *    dw 0       : MI_NOOP
- *    dw 1-27    : LRI(13, POSTED)  0x244 0x034 0x030 0x038 0x03c 0x168
- *                  0x140 0x110 0x1c0 0x1c4 0x1c8 0x180 0x2b4
- *    dw 28-32   : NOP(5)
- *    dw 33-51   : LRI(9,  POSTED)  0x3a8 0x28c 0x288 0x284 0x280 0x27c
- *                  0x278 0x274 0x270   ← PDP3..PDP0 (PDP0 = PML4, 4-level)
- *  Blocks 1+2 are byte-identical to gen12_rcs_offsets (same CTX_* value-slot
- *  dword indices 0x03..0x33) — only blocks 3-5 are absent (XCS has no
- *  indirect-ctx regs, no R_PWR_CLK_STATE, no GPR block). Value patches
- *  mirror lrcBuildContext() for the slots that exist; CTX_MI_MODE (0x61)
- *  and CTX_BB_OFFSET (0x71) do NOT exist here.
+ *  Builds the Gen12 XCS (VCS/VECS/BCS/CCS) LRC context at a given page offset.
+ *  All XCS engines share the same 52-dword layout (gen12_xcs_offsets).
  */
-static bool lrcBuildContextXcs(MyIntelRing *ring)
+bool lrcBuildContextXcsAt(MyIntelRing *ring, uint32_t pageOffset)
 {
-    uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
+    uint32_t *state = (uint32_t *)((uint8_t *)ring->lrcVaddr + pageOffset);
     bzero(state, LRC_STATE_DWORDS_XCS * sizeof(uint32_t));
 
     state[0] = MI_NOOP;
@@ -994,9 +1004,8 @@ static bool lrcBuildContextXcs(MyIntelRing *ring)
 
     OSSynchronizeIO();
 
-    RING_DEBUG_RAW("lrcBuildContextXcs: state@+0x%X ggtt=0x%X size=0x%X CTL=0x%X CC=0x%X (%u dw)",
-                   LRC_STATE_OFFSET, ring->ggttOffset, ring->size,
-                   state[CTX_RING_CTL], state[CTX_CONTEXT_CONTROL], LRC_STATE_DWORDS_XCS);
+    RING_DEBUG_RAW("lrcBuildContextXcsAt: XCS state@+0x%X ggtt=0x%X size=0x%X",
+                   pageOffset, ring->ggttOffset, ring->size);
     return true;
 }
 
@@ -1094,7 +1103,59 @@ bool lrcAllocPPGTT(MyIntelRing *ring, const MyIntelRingCallbacks *cb)
 
 /*
  * ─────────────────────────────────────────────
- *  lrcUpdateRingRegs/*
+ *  lrcMapBatchPages — Write PTEs for a batch buffer (identity map)
+ * ─────────────────────────────────────────────
+ *  Maps pageCount physical pages at VA == batchGGTT (identity: batch VA =
+ *  GGTT offset). Called at submit time, under the engine lock, BEFORE the
+ *  kick that emits BB_START.
+ */
+bool lrcMapBatchPages(MyIntelRing *ring, uint32_t batchGGTT,
+                      const uint64_t *pagesPhys, uint32_t pageCount)
+{
+    if (!ring || !ring->ppgttPTs || !pagesPhys || pageCount == 0) {
+        return false;
+    }
+
+    /* Guard: batch must fit inside the 256MB identity window */
+    const uint64_t end = (uint64_t)batchGGTT + (uint64_t)pageCount * GEM_PAGE_SIZE;
+    if (end > PPGTT_WINDOW_SIZE) {
+        RING_DEBUG_RAW("lrcMapBatchPages: batch 0x%X+%u pages exceeds 256MB window",
+                       batchGGTT, pageCount);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < pageCount; i++) {
+        const uint32_t va     = batchGGTT + i * (uint32_t)GEM_PAGE_SIZE;
+        const uint32_t ptIdx  = va >> 21;          /* 2MB per PT page */
+        const uint32_t pteIdx = (va >> 12) & 511;  /* PTE within PT page */
+        const uint64_t physAddr = pagesPhys[i] & ~0xFFFull;   /* page-granular clear */
+        ring->ppgttPTs[ptIdx * 512 + pteIdx] =
+            physAddr | ring->ppgttPteEncode;
+    }
+
+    OSSynchronizeIO();
+
+    /* [PPGTT-AUDIT] one-shot dump: hierarchy + first mapped PTEs vs phys[] */
+    {
+        const uint32_t ptIdx0 = batchGGTT >> 21;
+        RING_DEBUG_RAW("PPGTT-AUDIT: ggtt=0x%X n=%u | PML4[0]=%llX PDP[0]=%llX PD[%u]=%llX",
+                       batchGGTT, pageCount,
+                       ring->ppgttVaddr[0], ring->ppgttPdp[0],
+                       ptIdx0, ring->ppgttVaddr[2 * 512 + ptIdx0]);
+        for (uint32_t i = 0; i < pageCount && i < 3; i++) {
+            const uint32_t va  = batchGGTT + i * (uint32_t)GEM_PAGE_SIZE;
+            const uint64_t pte = ring->ppgttPTs[(va >> 21) * 512 + ((va >> 12) & 511)];
+            RING_DEBUG_RAW("PPGTT-AUDIT: VA=0x%X PTE=%llX (phys=%llX flags=%s)",
+                           va, pte, pagesPhys[i],
+                           (pte & 0xFFFFFFFFFFFFF000ull) == (pagesPhys[i] & 0xFFFFFFFFFFFFF000ull)
+                               ? "match" : "MISMATCH");
+        }
+    }
+
+    return true;
+}
+
+/*
  * ─────────────────────────────────────────────
  *  lrcUpdateRingRegs — Patch LRC ring regs before submit
  * ─────────────────────────────────────────────
@@ -1155,12 +1216,23 @@ void ringSubmitExeclists(MyIntelRing *ring, MyIntelRingCallbacks *cb)
      * + sw ctx id bits 47:37 (GEN11_SW_CTX_ID_SHIFT=37, nonzero; i915 uses
      * 1+tag → we use 1). hi dword = bits 63:32:
      *   class shift 61-32=29, sw_ctx_id shift 37-32=5.
-     * HW classes (intel_engine_types.h): RENDER=0 COPY=3 VIDEO_ENHANCE=4 */
+     * HW classes (intel_engine_types.h): RENDER=0 VIDEO_DECODE=2 COPY=3
+     * VIDEO_ENHANCE=4 — 2.0.250: VCS previously sent class=0 (render),
+     * fixed to VIDEO_DECODE per i915 execlists->ccid (gen11..12.54). */
     uint32_t hwClass = 0u;
     switch (ring->engineType) {
+        case kMyIntelEngineVCS:  hwClass = 2u; break;  /* VIDEO_DECODE */
         case kMyIntelEngineBCS:  hwClass = 3u; break;  /* COPY_ENGINE */
         case kMyIntelEngineVECS: hwClass = 4u; break;  /* VIDEO_ENHANCE */
         default:                 hwClass = 0u; break;  /* RENDER (RCS) */
+    }
+    /* A/B probe (case file a272fd1): mybcstest=N overrides BCS class so one
+     * boot tests an alternate encoding — 1=VIDEO_DECODE, 2=VIDEO_ENHANCE,
+     * 4/5=OTHER/COMPUTE. Default stays 3 (COPY) when arg absent or zero. */
+    if (ring->engineType == kMyIntelEngineBCS) {
+        uint32_t clsProbe = 0;
+        if (PE_parse_boot_argn("mybcstest", &clsProbe, sizeof(clsProbe)) && clsProbe && clsProbe <= 5)
+            hwClass = clsProbe;
     }
     uint32_t descHi = (hwClass << (61 - 32))   /* class, instance = 0 */
                     | (1u << (37 - 32));        /* sw ctx id = 1 */
@@ -1172,7 +1244,7 @@ void ringSubmitExeclists(MyIntelRing *ring, MyIntelRingCallbacks *cb)
      * desc=0x0/HEAD=0 (E2 hung-boot signature). Abort the submit and leave
      * the ring stalled rather than program a sleeping engine. */
     if (!fwHeld) {
-        RING_DEBUG_RAW("ringSubmitExeclists: ABORT — forcewake acquire failed; ELSP write would be dropped");
+        RING_DEBUG_RAW("ringSubmit: ABORT forcewake failed");
         return;
     }
 
@@ -1197,22 +1269,16 @@ void ringSubmitExeclists(MyIntelRing *ring, MyIntelRingCallbacks *cb)
      * workloop gate. i915 gen11_gt_irq_handler() never polls after submit;
      * completion arrives via the USER_INTERRUPT → IRQ chain. Do a single
      * immediate read for the boot log instead. */
-    bool inIrq = (cb->inIrqContext != NULL) && cb->inIrqContext(cb->context);
-
     uint32_t pollActive = 0, pollCsb = 0, pollHead = 0;
     int pollLoops = 0;
-    if (!inIrq) {
-        for (pollLoops = 0; pollLoops < 10; pollLoops++) {
-            IODelay(1000); /* 1ms */
-            uint32_t elSt = cb->readReg32(cb->context, base + RING_EXECLIST_STATUS_LO_OFFSET);
-            pollActive = elSt & EXECLIST_STATUS_ELEMENT_ACTIVE;
-            pollCsb = ring->hwspVaddr ? ring->hwspVaddr[HWS_CSB_WRITE_DWORD] : 0;
-            pollHead = cb->readReg32(cb->context, base + RING_HEAD_REG_OFFSET) & 0xFFFFFFFC;
-            if (pollActive || pollCsb != (HWS_CSB_ENTRIES_GEN11 - 1) || pollHead != 0) {
-                break;
-            }
-        }
-    } else {
+    {
+        /* 2.0.230: single-shot probe on every path. The old 10×1ms poll on the
+         * userclient path added ~9ms of fixed submission latency — measured on
+         * hardware as a flat 8.8-9.9ms per selector-25 ioctl from 0.02MB to
+         * 8.3MB, i.e. pure overhead, not bandwidth. The probe is diagnostics
+         * only: EL_CTRL_LOAD starts the engine and completion arrives via the
+         * USER_INTERRUPT/IRQ chain, so blocking the caller cannot make the
+         * batch run any sooner. */
         uint32_t elSt = cb->readReg32(cb->context, base + RING_EXECLIST_STATUS_LO_OFFSET);
         pollActive = elSt & EXECLIST_STATUS_ELEMENT_ACTIVE;
         pollCsb = ring->hwspVaddr ? ring->hwspVaddr[HWS_CSB_WRITE_DWORD] : 0;
@@ -1249,7 +1315,7 @@ void ringSubmitExeclists(MyIntelRing *ring, MyIntelRingCallbacks *cb)
         uint32_t ringIpeir = cb->readReg32(cb->context, base + RING_IPEIR_OFFSET);
         uint32_t ringIpehr = cb->readReg32(cb->context, base + RING_IPEHR_OFFSET);
         uint32_t gtFault   = cb->readReg32(cb->context, GEN12_RING_FAULT_REG_OFFSET);
-        RING_DEBUG_RAW("ringSubmitExeclists: HEAD=0x%X TAIL=0x%X EIR=0x%08X ESR=0x%08X IPEIR=0x%08X IPEHR=0x%08X",
+        RING_DEBUG_RAW("ringSubmit: HEAD=%X TAIL=%X EIR=%X ESR=%X IPEIR=%X IPEHR=%X",
                        ringHead & 0xFFFFFFFC, ringTail & 0xFFFFFFFC,
                        ringEir, ringEsr, ringIpeir, ringIpehr);
         RING_DEBUG_RAW("ringSubmitExeclists: FAULT_GEN12=0x%08X%s",
@@ -1387,6 +1453,57 @@ bool ringEmitUserInterrupt(MyIntelRing *ring)
     return true;
 }
 
+/* Gen9 XY_FAST_COPY_BLT 10-dw — same encoding as the proven
+ * emitBcsBlitCopy() path, generalized for arbitrary pitch/rect. */
+bool ringEmitSurfacePresent(MyIntelRing *bcs,
+                            uint32_t dstGgtt, uint32_t dstPitchBytes,
+                            uint32_t srcGgtt, uint32_t srcPitchBytes,
+                            uint16_t wPx, uint16_t hPx)
+{
+    if (!bcs || !ringIsInitialized(bcs))
+        return false;
+    if ((dstGgtt & (PAGE_SIZE - 1)) || (srcGgtt & (PAGE_SIZE - 1)))
+        return false;
+
+    uint32_t *cs = ringBegin(bcs, 10);
+    if (!cs) return false;
+
+    cs[0] = GEN9_XY_FAST_COPY_BLT_10DW;
+    cs[1] = BLT_DEPTH_32 | dstPitchBytes;   /* dst pitch */
+    cs[2] = 0;                              /* dst x1,y1 */
+    cs[3] = ((uint32_t)hPx << 16) | wPx;    /* dst y2,x2 */
+    cs[4] = dstGgtt;
+    cs[5] = 0;                              /* dst instance */
+    cs[6] = 0;                              /* src x1,y1 */
+    cs[7] = srcPitchBytes;                  /* src pitch */
+    cs[8] = srcGgtt;
+    cs[9] = 0;                              /* src instance */
+
+    ringAdvance(bcs, cs + 10);
+
+    RING_DEBUG_RAW("ringEmitSurfacePresent: src=0x%X dst=0x%X %ux%u",
+                   srcGgtt, dstGgtt, wPx, hPx);
+    return true;
+}
+
+bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va)
+{
+    /* i915 gen8_emit_bb_start parity — 4 dwords, qword aligned:
+     *   MI_ARB_ON_OFF|MI_ARB_ENABLE + BB_START_GEN8|non-secure + lo + hi
+     * Non-secure bit (1<<8): without it the parser rejects the jump. */
+    uint32_t *cs = ringBegin(ring, 4);
+    if (!cs) return false;
+
+    *cs++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
+    *cs++ = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_BUFFER_START_NONSEC;
+    *cs++ = va;                     /* lower 32 bits (identity → GGTT offset) */
+    *cs++ = 0;                      /* upper 32 bits (32-bit PPGTT) */
+
+    ringAdvance(ring, cs);
+    RING_DEBUG_RAW("ringEmitBatchStart: va=0x%X (4 dwords)", va);
+    return true;
+}
+
 bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia)
 {
     /*
@@ -1474,6 +1591,51 @@ uint32_t emitBcsBlitCopy(uint32_t *dst, uint32_t dstAddr,
     return 12;
 }
 
+uint32_t emitBcsBlitRect(uint32_t *dst,
+                         uint32_t dstAddr, uint32_t dstPitch,
+                         uint32_t srcAddr, uint32_t srcPitch,
+                         uint32_t dstX, uint32_t dstY,
+                         uint32_t srcX, uint32_t srcY,
+                         uint32_t width, uint32_t height,
+                         uint32_t fenceAddr, uint32_t seqno)
+{
+    if (!dst || width == 0 || height == 0) return 0;
+    if (width > 0x7FFFu || height > 0x7FFFu) return 0;
+    if (dstX > 0x7FFFu || dstY > 0x7FFFu) return 0;
+    if (srcX > 0x7FFFu || srcY > 0x7FFFu) return 0;
+    if (dstX + width > 0x7FFFu || dstY + height > 0x7FFFu) return 0;
+    if (srcX + width > 0x7FFFu || srcY + height > 0x7FFFu) return 0;
+    if ((dstPitch & 3u) || (srcPitch & 3u)) return 0;
+    if (dstPitch < width * 4u || srcPitch < width * 4u) return 0;
+    if (dstPitch > 0xFFFFu || srcPitch > 0xFFFFu) return 0;
+    if ((fenceAddr != 0) != (seqno != 0)) return 0;
+
+    dst[0]  = GEN9_XY_FAST_COPY_BLT_10DW;
+    dst[1]  = BLT_DEPTH_32 | dstPitch;
+    dst[2]  = (dstY << 16) | dstX;
+    dst[3]  = ((dstY + height) << 16) | (dstX + width);
+    dst[4]  = dstAddr;
+    dst[5]  = 0;
+    dst[6]  = (srcY << 16) | srcX;
+    dst[7]  = srcPitch;
+    dst[8]  = srcAddr;
+    dst[9]  = 0;
+    if (!fenceAddr) {
+        dst[10] = MI_BATCH_BUFFER_END;
+        dst[11] = MI_NOOP;
+        return 12;
+    }
+    /* Fence: MI_STORE_DWORD_IMM_GEN4 (hdr, addr lo/hi, value) — PPGTT VA,
+     * no MI_USE_GGTT, blitter-safe (i915 igt_spinner.c:163). */
+    dst[10] = MI_STORE_DWORD_IMM_GEN4;
+    dst[11] = fenceAddr;
+    dst[12] = 0;
+    dst[13] = seqno;
+    dst[14] = MI_BATCH_BUFFER_END;
+    dst[15] = MI_NOOP;
+    return 16;
+}
+
 uint32_t emitMiMathProof(uint32_t *dst, uint32_t storeAddr,
                          uint32_t operandA, uint32_t operandB)
 {
@@ -1485,9 +1647,26 @@ uint32_t emitMiMathProof(uint32_t *dst, uint32_t storeAddr,
     const uint32_t gpr1 = gpr0 + 8;
 
     uint32_t n = 0;
+    /* MI_NOOP is REQUIRED before every MI_LRI — i915 intel_gpu_commands.h:
+     * "Always issue a MI_NOOP _before_ the MI_LOAD_REGISTER_IMM - otherwise
+     * hw simply ignores the register load under certain conditions."
+     * (The proven WriteMagic batch already does this: cmd[5] NOOP before
+     * cmd[6] LRI; MiMath's LRI was the first command → LRI ignored → GPR0
+     * kept the stale 0xcafebabe → sum never computed.)
+     * Also zero the top 32 bits of each GPR first, mirroring i915 noa_wait:
+     * "clear out the top 32b bits of the register because the ALU works
+     * 64bits" — garbage hi halves would corrupt the 64-bit ADD carry. */
+    dst[n++] = 0;                               /* MI_NOOP */
+    dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR0+4 (hi) = 0 */
+    dst[n++] = gpr0 + 4;
+    dst[n++] = 0;
     dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR0 = A */
     dst[n++] = gpr0;
     dst[n++] = operandA;
+    dst[n++] = 0;                               /* MI_NOOP */
+    dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR1+4 (hi) = 0 */
+    dst[n++] = gpr1 + 4;
+    dst[n++] = 0;
     dst[n++] = MI_LOAD_REGISTER_IMM(1);         /* LRI CS_GPR1 = B */
     dst[n++] = gpr1;
     dst[n++] = operandB;

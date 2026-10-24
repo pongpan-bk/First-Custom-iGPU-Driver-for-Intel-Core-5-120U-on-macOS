@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -15,9 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>4.3.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>2.0.240</string>
+	<string>4.4.176</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Universal_AutoMatch_GPU</key>
@@ -26,58 +28,65 @@
 			<string>com.pongpan-bk.MyIntelGPU</string>
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
-			<!-- ใช้ Class Match กว้างเพื่อเตะไดรเวอร์ดั้งเดิมของระบบทิ้งให้หมด -->
-			<key>IOPCIClassMatch</key>
-			<string>0x03000000&amp;0xff000000</string>
-			<key>IOProbeScore</key>
-			<integer>9999</integer>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-			<!-- ค่าข้อมูลฮาร์ดแวร์จริง ชิปดั้งเดิม Raptor Lake-P (0xA7AC) ไร้ค่าสปูฟหลอกลวง -->
-			<key>device-id</key>
-			<data>rKcAAA==</data>
-			<key>model</key>
-			<string>Intel Raptor Lake-U Graphics (Core 5 120U)</string>
-			<!-- เปิดใช้งาน IOAccelerator2 ให้ WindowServer รู้จัก -->
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
-			<key>IOVARendererID</key>
-			<data>AAAAAA==</data>
-		</dict>
-		<key>Metal_GPU_Stub</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.pongpan-bk.MyIntelGPU</string>
-			<key>IOClass</key>
-			<string>MyIntelGPU</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
+			<key>IOPCIMatch</key>
+			<string>0xa7ac8086</string>
+			<key>IOProbeScore</key>
+			<integer>60000</integer>
 			<key>IOProviderClass</key>
-			<string>IOResources</string>
-			<key>IOResourceMatch</key>
-			<string>IOKit</string>
-			<key>MetalPluginName</key>
-			<string>AppleSoftwareRendererMetal</string>
+			<string>IOPCIDevice</string>
+			<key>IOVARendererID</key>
+			<data>AQAAAA==</data>
+			<key>IOVARendererSubID</key>
+			<data>AQAAAA==</data>
+			<key>IOVARendererName</key>
+			<string>MyIntelGPU</string>
+			<key>IOAccelIndex</key>
+			<integer>0</integer>
+			<key>IOAccelTypes</key>
+			<string>Metal</string>
+			<key>IOAccelDisplayPipeCapabilities</key>
+			<dict>
+				<key>DisplayPipeA</key>
+				<true/>
+			</dict>
 			<key>MetalPluginClassName</key>
-			<string>MTLCompilerService</string>
-			<key>IOGLBundleName</key>
-			<string>AppleSoftwareRenderer</string>
-			<key>IOGLESBundleName</key>
-			<string>AppleSoftwareRenderer</string>
+			<string>MyIntelGPUMTLDriver</string>
+			<key>MetalPluginName</key>
+			<string>MyIntelGPUMTLDriver.bundle</string>
+			<key>MetalStatisticsName</key>
+			<string>Intel Graphics</string>
+			<key>model</key>
+			<string>Intel Graphics</string>
 		</dict>
 	</dict>
+	<key>MaxKernel</key>
+	<string></string>
+	<key>MinKernel</key>
+	<string>22.0.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
 	<key>OSBundleLibraries</key>
 	<dict>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>597</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
-		<key>com.apple.iokit.IOGraphicsFamily</key>
-		<string>500.0</string>
+		<key>com.apple.iokit.IOSurface</key>
+		<string>1.0</string>
 		<key>com.apple.kpi.bsd</key>
-		<string>10.0.0</string>
+		<string>22.6.6</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>10.0.0</string>
+		<string>22.6.6</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>10.0.0</string>
+		<string>22.6.6</string>
 		<key>com.apple.kpi.mach</key>
-		<string>10.0.0</string>
+		<string>22.6.6</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>22.6.6</string>
 	</dict>
 	<key>OSBundleRequired</key>
 	<string>Root</string>

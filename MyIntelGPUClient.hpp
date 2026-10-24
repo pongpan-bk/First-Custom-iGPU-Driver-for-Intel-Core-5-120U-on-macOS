@@ -2,7 +2,13 @@
 #define MyIntelGPUClient_hpp
 
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
 #include "MyIntelGPU.hpp"
+
+/* clientMemoryForType base: userspace maps GEM slot N with memory type
+ * (MyIntelGPU_GEM_MAP_BASE + N). Slots are assigned in AllocGEM order. */
+#define MyIntelGPU_GEM_MAP_BASE 0x200u
 
 class MyIntelGPUClient : public IOUserClient {
     OSDeclareDefaultStructors(MyIntelGPUClient)
@@ -18,6 +24,10 @@ private:
 
     MyIntelGPU* fProvider;   // retained in start(), released in free() (Oracle #2: UAF fix)
     task_t      fClientTask;
+    // Dirty-ring shared memory for selector 10 (IOAccelSharedSetupDirtyRing)
+    IOMemoryDescriptor* fDirtyRingMD;
+    IOMemoryMap*        fDirtyRingMap;
+    uint64_t            fDirtyRingUserVA;
 
 public:
     virtual bool initWithTask(task_t owningTask, void * securityToken, UInt32 type) override;
@@ -29,6 +39,11 @@ public:
     virtual IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments * arguments,
                                     IOExternalMethodDispatch * dispatch = NULL,
                                     OSObject * target = NULL, void * reference = NULL) override;
+    
+    virtual IOReturn clientHasPrivilege(const void* privilegeArg, OSString* privilegeType);
+
+    virtual IOReturn clientMemoryForType(uint32_t type, uint32_t *flags,
+                                         IOMemoryDescriptor **memory) override;
 };
 
 #endif /* MyIntelGPUClient_hpp */
