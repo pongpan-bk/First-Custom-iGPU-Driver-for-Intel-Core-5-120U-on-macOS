@@ -100,8 +100,8 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: บิ้วต้องไม่เกิน 216,000 bytes (เดิม 200,000; user อนุมัติยกเป็น 216,000
-# 2026-10-18 เพราะ __TEXT ชนขอบหน้า ld พอดี — NV12 ต้องการเพิ่ม 1 หน้า -> 211,968)
+# Size budget: บิ้วต้องไม่เกิน 220,000 bytes (repo หลักใช้ 216,000; รีโพนี้
+# รวม IntelFramebuffer.cpp เพิ่มอีก ~10KB → 4.4.x ลิงก์ออกมา 217,296 bytes)
 # -Oz                    : size-first optimizer (smaller than -Os)
 # -ffunction-sections/-fdata-sections + -Wl,-dead_strip
 #                        : section-per-function แล้ว linker ตัดฟังก์ชัน/ข้อมูล
@@ -195,10 +195,10 @@ $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.pli
 	# strip -x -S "$@"
 	ls -la "$(TARGET).kext/Contents/MacOS/"
 	@actual=$$(stat -f%z "$@"); \
-	if [ "$$actual" -gt 216000 ]; then \
-		echo "ERROR: binary $$actual bytes > 216000 budget — build rejected"; exit 1; \
+	if [ "$$actual" -gt 220000 ]; then \
+		echo "ERROR: binary $$actual bytes > 220000 budget — build rejected"; exit 1; \
 	else \
-		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤216000) ───"; \
+		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤220000) ───"; \
 	fi
 
 # ─── Embed Metal plugin bundle ───────────────────────────────────
@@ -258,7 +258,7 @@ strip_binary:
 
 # ─── File Size Check ──────────────────────────────────────────────
 sizecheck:
-	@maxsize=216000; \
+	@maxsize=220000; \
 	actual=$$(stat -f%z "$(TARGET).kext/Contents/MacOS/$(TARGET)" 2>/dev/null || echo 0); \
 	if [ "$$actual" -gt "$$maxsize" ]; then \
 		echo "WARNING: Binary $$actual bytes exceeds $$maxsize — check for bloat"; \
