@@ -100,9 +100,8 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: 216,000 bytes (user 2026-10-23; 210,000 ก่อนหน้า 2026-10-20
-# เพราะ __TEXT เต็มหน้าพอดี — 4.4.173 เพิ่ม BCS fence + vblank bridge 3.6KB
-# ซึ่งดัน __TEXT ขึ้นอีก 1 หน้า; gate เดิมเข้มกว่าเพดานจริงของ KC โดยไม่มีเหตุผล)
+# Size budget: บิ้วต้องไม่เกิน 216,000 bytes (เดิม 200,000; user อนุมัติยกเป็น 216,000
+# 2026-10-18 เพราะ __TEXT ชนขอบหน้า ld พอดี — NV12 ต้องการเพิ่ม 1 หน้า -> 211,968)
 # -Oz                    : size-first optimizer (smaller than -Os)
 # -ffunction-sections/-fdata-sections + -Wl,-dead_strip
 #                        : section-per-function แล้ว linker ตัดฟังก์ชัน/ข้อมูล
@@ -117,7 +116,6 @@ CXXFLAGS = -std=c++14 \
            -mmacosx-version-min=12.0 \
            -arch x86_64 \
            -Oz \
-           -flto \
            -ffunction-sections \
            -fdata-sections \
            -nostdlib \
@@ -143,20 +141,19 @@ CXXFLAGS = -std=c++14 \
 #           แล้ว strip -x ลบทิ้งจาก strtab/symtab → ลด LINKEDIT ~18KB
 #           การ register class ผ่าน __mod_init_func (section-based) ไม่ใช่
 #           ชื่อ symbol จึงไม่กระทบ personality matching (พิสูจน์แล้วด้วย nm)
-LDFLAGS = -flto \
-          -Xlinker -kext \
+LDFLAGS = -Xlinker -kext \
           -Xlinker -dead_strip \
           -Xlinker -x \
           -Xlinker -exported_symbols_list \
           -Xlinker $(CURDIR)/exported_symbols.txt
 
 # ─── Sources (Pure Native — 11 files, no Lilu plugin shim) ───────
-SRC = MyIntelGPU.cpp MyIntelFramebuffer.cpp \
+SRC = MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
       MyIntelAccelerator.cpp MyIntelMedia.cpp \
       MyIntelRing.cpp MyIntelGEMBuffer.cpp MyIntelGPUClient.cpp \
       MyIntelVCSCommand.cpp MyIntelVCSClient.cpp \
       MyIntelEDIDParser.cpp
-OBJ = MyIntelGPU.o MyIntelFramebuffer.o MyIntelMedia.o \
+OBJ = MyIntelGPU.o IntelFramebuffer.o MyIntelFramebuffer.o MyIntelMedia.o \
       MyIntelAccelerator.o MyIntelRing.o MyIntelGEMBuffer.o MyIntelGPUClient.o \
       MyIntelVCSCommand.o MyIntelVCSClient.o \
       MyIntelEDIDParser.o
