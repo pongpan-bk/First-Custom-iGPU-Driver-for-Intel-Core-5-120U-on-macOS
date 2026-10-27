@@ -1,3 +1,5 @@
+กูเลิกทำแล้วววววววววว
+
 <div align="center">
 
 # ⚡ MYINTELGPU — HONEST IDENTITY DRIVER
