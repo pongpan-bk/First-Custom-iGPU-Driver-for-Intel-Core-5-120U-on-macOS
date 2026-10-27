@@ -1,0 +1,311 @@
+[0;36m╔══════════════════════════════════════════════════════════════════╗[0m
+[0;36m║       MyIntelGPU Diagnostic Suite - 1-Click Run                ║[0m
+[0;36m║       Intel Gen 10-12 iGPU Driver Debug for macOS 15           ║[0m
+[0;36m╚══════════════════════════════════════════════════════════════════╝[0m
+
+[1;33mLog file: /Users/ppbk/Desktop/MyIntelGPU_Diagnostics_20261027_142932.log[0m
+
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;34m📦 CAT 1: Bare-Metal Core & IRQ (Ring Buffers, IRQ, VBlank)[0m
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1;33m[1.1] Ring Submit / IRQ History (last 30 min)[0m
+2026-10-27 14:50:09.338383+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:4825 Phase 5c: Creating IntelFramebuffer (no interrupts)...
+2026-10-27 14:50:09.338389+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:4839 Phase 5c: Initialized without Interrupts
+2026-10-27 14:50:09.338392+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:4914 Phase 5d: SKIPPED MyIntelFramebuffer (GPU-only)
+2026-10-27 14:50:09.467255+0700  localhost kernel[0]: (MyIntelGPU) Ring: lrcBuildContext: full LRC built @<private> size=0x6000 (RCS+VCS+VECS+BCS+CCS)
+2026-10-27 14:50:09.493374+0700  localhost kernel[0]: (MyIntelGPU) Ring: lrcBuildContext: full LRC built @<private> size=0x6000 (RCS+VCS+VECS+BCS+CCS)
+2026-10-27 14:50:09.493388+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:3529 HW Accel: Allocating VCS ring buffer (base=0x1C0000)...
+2026-10-27 14:50:09.498689+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:3550 HW Accel: Creating VCS ring (mmio_base=0x1C0000)...
+2026-10-27 14:50:14.132698+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringCreate: engine=VCS mmioBase=0x1C0000 size=16384
+2026-10-27 14:50:14.166388+0700  localhost kernel[0]: (MyIntelGPU) Ring: lrcBuildContext: full LRC built @<private> size=0x6000 (RCS+VCS+VECS+BCS+CCS)
+2026-10-27 14:50:14.166395+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:3564 HW Accel: VCS ring created OK (ggttOffset=0x4128000, vaddr=<private>)
+2026-10-27 14:50:14.166493+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: post-kick poll ACTIVE=0 CSBwr=0x0 HEAD=0x0 loops=1
+2026-10-27 14:50:14.166502+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: desc=0x000000200408C11D tail=24 CSBwr=0 ACTIVE=0
+2026-10-27 14:50:14.166503+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: EXECLIST_STATUS_HI=0x00000020
+2026-10-27 14:50:14.166513+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmit: HEAD=0 TAIL=18 EIR=0 ESR=0 IPEIR=0 IPEHR=11080001
+2026-10-27 14:50:14.166514+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: FAULT_GEN12=0x00000000
+2026-10-27 14:50:14.166515+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[00]=0x03FF8000_00008001
+2026-10-27 14:50:14.166516+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[01]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166517+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[02]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166518+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[03]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166519+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[04]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166519+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[05]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166520+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[06]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166521+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[07]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166521+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[08]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166522+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[09]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166523+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[10]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166523+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[11]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166538+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: post-kick poll ACTIVE=0 CSBwr=0x0 HEAD=0x0 loops=1
+2026-10-27 14:50:14.166545+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: desc=0x600000200411E11D tail=24 CSBwr=0 ACTIVE=0
+2026-10-27 14:50:14.166546+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: EXECLIST_STATUS_HI=0x60000020
+2026-10-27 14:50:14.166554+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmit: HEAD=18 TAIL=18 EIR=0 ESR=0 IPEIR=0 IPEHR=1000000
+2026-10-27 14:50:14.166555+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: FAULT_GEN12=0x00000000
+2026-10-27 14:50:14.166556+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[00]=0x03FF8000_00008019
+2026-10-27 14:50:14.166556+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[01]=0x00008000_03FF8018
+2026-10-27 14:50:14.166557+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[02]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166558+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[03]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166558+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[04]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166559+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[05]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166560+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[06]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166560+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[07]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166561+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[08]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166562+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[09]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166562+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[10]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166563+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: CSB[11]=0xFFFFFFFF_FFFFFFFF
+2026-10-27 14:50:14.166564+0700  localhost kernel[0]: (MyIntelGPU) MyIntelGPU:3607 HW Accel: Emitting VCS init commands...
+2026-10-27 14:50:14.166578+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: post-kick poll ACTIVE=0 CSBwr=0x0 HEAD=0x0 loops=1
+2026-10-27 14:50:14.166585+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: desc=0x40000020041B011D tail=24 CSBwr=0 ACTIVE=0
+2026-10-27 14:50:14.166588+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: EXECLIST_STATUS_HI=0x40000020
+2026-10-27 14:50:14.166598+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmit: HEAD=18 TAIL=18 EIR=0 ESR=0 IPEIR=0 IPEHR=1000000
+2026-10-27 14:50:14.166599+0700  localhost kernel[0]: (MyIntelGPU) Ring: ringSubmitExeclists: FAULT_GEN12=0x00000000
+  No matches found
+
+[1;33m[1.2] VBlank Counters & Framebuffer Underrun (last 20 min)[0m
+  No matches found
+
+[1;33m[1.3] Kext Load Status & UUID Stack Hash[0m
+  120    0 0xffffff7f970fe000 0x12ff4    0x12ff4    com.pongpan-bk.MyIntelGPU (4.4.203) E6F0B654-261D-35C1-9D5B-2B9C12607B33 <114 91 18 9 7 6 3 1>
+
+[0;32m✅ CAT 1 Complete[0m
+
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;34m🪟 CAT 2: WindowServer & QuartzCore (UI Lag, 3D Wallpaper)[0m
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1;33m[2.1] Fence Timeout / CARenderServer Denial (last 15 min)[0m
+2026-10-27 14:50:24.813930+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 14:51:13.771853+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 07:56:20.389644+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 717259539895
+2026-10-27 07:56:20.389646+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 717259539894
+2026-10-27 08:00:12.303947+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:00:24.805863+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 747324309563
+2026-10-27 08:02:40.110034+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:03:12.553998+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:04:11.055493+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:04:20.938548+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 747324309539
+2026-10-27 08:09:27.019163+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:12:35.364533+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] Context is a zombie! cid=dbb997d4
+2026-10-27 08:12:35.364534+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] CmdStreamMsg for dbb997d4 is invalid
+2026-10-27 08:18:33.053032+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:25:51.049344+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for b3b425ed with (1146,1144): req r1145(0)
+2026-10-27 08:25:51.366873+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for b3b425ed with (1156,1154): req r1155(0)
+2026-10-27 08:29:35.817826+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:33:02.189657+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:API] CoreAnimation: NULL color space set on context (d9579248)
+2026-10-27 15:50:51.801450+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:53:11.290410+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:55:19.087932+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:API] CoreAnimation: NULL color space set on context (ebd9f4e9)
+2026-10-27 08:55:19.133772+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:API] CoreAnimation: NULL color space set on context (a6922278)
+2026-10-27 08:55:19.922529+0700  localhost WindowServer[166]: (CoreAnalytics) [com.apple.CoreAnalytics:client] Timed out waiting for the exit barrier block. activeSendTransactions=0
+2026-10-27 08:56:22.280335+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:56:32.084357+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571169
+2026-10-27 08:58:18.173596+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:58:19.228159+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:59:06.316125+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for 6c760747 with (1439,1437): req r1438(0)
+2026-10-27 09:50:01.664018+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 09:55:07.509811+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 09:57:49.968522+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964573302
+2026-10-27 09:57:49.968525+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964573300
+2026-10-27 09:59:44.660791+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:00:45.316834+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:00:57.902723+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571222
+2026-10-27 10:00:58.402775+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out batch 2b55f
+2026-10-27 10:01:44.034022+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:01:58.141271+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571558
+2026-10-27 10:01:58.141273+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571557
+2026-10-27 10:04:02.795666+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:04:02.795670+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:04:06.424455+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964572031
+2026-10-27 10:04:06.424459+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964572030
+2026-10-27 10:05:12.512210+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:05:26.080533+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571218
+2026-10-27 10:07:13.344754+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:14:06.963306+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:API] CoreAnimation: NULL color space set on context (2d1cfa9c)
+2026-10-27 10:14:07.016254+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:14:59.044050+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:15:08.989796+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571170
+
+[1;33m[2.2] CoreDisplay Refresh Rate / IOFBNeedsRefresh (last 15 min)[0m
+2026-10-27 14:50:21.259777+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in CGXConstructVirtualFramebuffer 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+2026-10-27 14:50:21.260567+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting main display 0x00000000 offline 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+2026-10-27 14:50:21.263264+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x41dc9d00 main in CGXMainDisplayDevice 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+2026-10-27 14:50:24.631241+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - Creating FB 1 of 1
+2026-10-27 14:50:24.652187+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - IOFBSetDisplayModeAndDepth: Setting mode 0x0 with depth 0x0 on displayID: 0x0 fbRegID: 0x1000004f0
+2026-10-27 14:50:24.652189+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - IOFBSetDisplayModeAndDepth: IOService:/AppleACPIPlatformExpert/PC00/AppleACPIPCI/GFX0@2-756e6b6e-717-0
+2026-10-27 14:50:24.652190+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - IOFBSetDisplayModeAndDepth: Failed to obtain mode info from IOFBGetDisplayModeInformation()
+2026-10-27 14:50:24.660744+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - 	
+	0  	    0x7ff813c4a9b8	std::__1::pair<std::__1::__hash_iterator<std::__1::__hash_node<std::__1::__hash_value_type<unsigned long long, CoreDisplay::DisplayPipe>, void*>*>, bool> std::__1::__hash_table<std::__1::__hash_value_type<unsigned long long, CoreDisplay::DisplayPipe>, std::__1::__unordered_map_hasher<unsigned long long, std::__1::__hash_value_type<unsigned long long, CoreDisplay::DisplayPipe>, std::__1::hash<unsigned long long>, std::__1::equal_to<unsigned long long>, true>, std::__1::__unordered_map_equal<unsigned long long, std::__1::__hash_value_type<unsigned long long, CoreDisplay::DisplayPipe>, std::__1::equal_to<unsigned long long>, std::__1::hash<unsigned long long>, true>, std::__1::allocator<std::__1::__hash_value_type<unsigned long long, CoreDisplay::DisplayPipe>>>::__emplace_unique_impl<std::__1::piecewise_construct_t const&, std::__1::tuple<unsigned long long&>, std::__1::tuple<unsigned long long&>>(std::__1::piecewise_construct_t const&, std::__1::tuple<unsigned long long&>&&, std::__1::tuple<unsigned long long&>&&) + 4340
+	1  	    0x7ff813d27a4b	CoreDisplay::Framebuffer::Framebuffer(unsigned int, unsigned long long, unsigned int, unsigned long long) + 3601
+	2  	    0x7ff813cb2402	CoreDisplay::GPU::GPU(__GPUWranglerGPU*, dispatch_queue_s*) + 744
+	3  	    0x7ff813cc70d5	invocation function for block in CoreDisplay::GPUController::GPUController() + 2634
+	7  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.661063+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - Created FB 1 of 1
+2026-10-27 14:50:24.664033+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Error: No property 'FB_Triage', or property isn't a string.
+2026-10-27 14:50:24.664199+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Error: Can't get value for key 'Triage'.
+2026-10-27 14:50:24.664319+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - GPU: FB: 1 of 1 opened
+2026-10-27 14:50:24.665909+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in AddCGXDisplayDeviceToDeviceList 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	3  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.679013+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - isBroadwellOrLater_block_invoke: sysctlbyname fail with error status 0x00000000
+2026-10-27 14:50:24.679020+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - isSkylakeOrLater_block_invoke: sysctlbyname fail with error status 0x00000000
+2026-10-27 14:50:24.679025+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - isCannonLakeOrLater_block_invoke: sysctlbyname fail with error status 0x00000000
+2026-10-27 14:50:24.679520+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - get_display_device_info: force8BPC = YES
+2026-10-27 14:50:24.680141+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Display id 0x00000000 -> 0x5b81c5c0
+2026-10-27 14:50:24.680149+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [WARN] - get_display_device_info: Display 0x5b81c5c0 force8BPC=YES isBDW=YES isSKL=NO isCNL=NO isAcc=NO isMUX=NO isBuiltIn=NO isMobile=YES isSkylakeMacBook=NO
+2026-10-27 14:50:24.680230+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - device_preserves_framebuffer: IOFBNeedsRefresh key not found in IORegistry
+2026-10-27 14:50:24.680231+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - device_preserves_framebuffer: needs_refresh = NO
+2026-10-27 14:50:24.771901+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in CGXConstructVirtualFramebuffer 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.772136+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting main display 0x00000000 offline 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.772615+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in CGXConstructVirtualFramebuffer 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.778742+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting main display 0x00000000 offline 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.779295+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in CGXConstructVirtualFramebuffer 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.779531+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting main display 0x00000000 offline 	
+	0  	    0x7ff813c4fe23	CoreDisplay::AddMainOfflineBreadcrumb(bool, char const*, ...) + 317
+	5  	    0x7ff81795f7d1	WS::Displays::CoreDisplayManager::initialize() + 43
+2026-10-27 14:50:24.780093+0700  localhost WindowServer[167]: (CoreDisplay) [com.apple.CoreDisplay:default] [ERROR] - Setting offline display 0x00000000 main in CGXConstructVirtualFramebuffer 	
+  No matches found
+
+[1;33m[2.3] Shader/Texture/Surface/Metal Render Status (last 20 min)[0m
+2026-10-27 14:50:24.813930+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 14:51:13.771853+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 07:56:20.389644+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 717259539895
+2026-10-27 07:56:20.389646+0700  localhost WindowServer[167]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 717259539894
+2026-10-27 08:00:12.303947+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:00:24.805863+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 747324309563
+2026-10-27 08:02:40.110034+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:03:12.553998+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:04:11.055493+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:04:20.938548+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 747324309539
+2026-10-27 08:09:27.019163+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:12:35.364533+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] Context is a zombie! cid=dbb997d4
+2026-10-27 08:12:35.364534+0700  localhost WindowServer[174]: (QuartzCore) [com.apple.coreanimation:Render] CmdStreamMsg for dbb997d4 is invalid
+2026-10-27 08:18:33.053032+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:25:51.049344+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for b3b425ed with (1146,1144): req r1145(0)
+2026-10-27 08:25:51.366873+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for b3b425ed with (1156,1154): req r1155(0)
+2026-10-27 08:29:35.817826+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 15:50:51.801450+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:53:11.290410+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:56:22.280335+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 08:56:32.084357+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571169
+2026-10-27 08:58:18.173596+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:58:19.228159+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 08:59:06.316125+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] synchronize timed out for 6c760747 with (1439,1437): req r1438(0)
+2026-10-27 09:50:01.664018+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 09:55:07.509811+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 09:57:49.968522+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964573302
+2026-10-27 09:57:49.968525+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964573300
+2026-10-27 09:59:44.660791+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:00:45.316834+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:00:57.902723+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571222
+2026-10-27 10:00:58.402775+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out batch 2b55f
+2026-10-27 10:01:44.034022+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:01:58.141271+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571558
+2026-10-27 10:01:58.141273+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571557
+2026-10-27 10:04:02.795666+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:04:02.795670+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:04:06.424455+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964572031
+2026-10-27 10:04:06.424459+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964572030
+2026-10-27 10:05:12.512210+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:05:26.080533+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571218
+2026-10-27 10:07:13.344754+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:14:07.016254+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+2026-10-27 10:14:59.044050+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 10:15:08.989796+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571170
+2026-10-27 10:17:35.925196+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 20:50:13.756532+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] unable to register bootstrap port com.apple.CARenderServer: 44f
+2026-10-27 20:50:28.676593+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571171
+2026-10-27 20:50:32.677923+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] timed out fence 712964571206
+2026-10-27 14:15:28.260451+0700  localhost WindowServer[166]: (QuartzCore) [com.apple.coreanimation:Render] failed to send rlfg reply: 10000003
+
+[0;32m✅ CAT 2 Complete[0m
+
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;34m🔒 CAT 3: AppleKeyStore & ACM (Boot Security, SUID, Media)[0m
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1;33m[3.1] AppleKeyStore / ACM / SUID / Session Freeze (last 20 min)[0m
+2026-10-27 14:50:33.183162+0700  localhost loginwindow[173]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 14:50:33.183206+0700  localhost loginwindow[173]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 08:00:21.373113+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 08:00:21.373123+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 08:04:20.204882+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 08:04:20.204922+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 08:18:41.469034+0700  localhost loginwindow[170]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 08:18:41.469660+0700  localhost loginwindow[170]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 15:50:59.424269+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 15:50:59.424275+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 08:56:31.407005+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 08:56:31.407014+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 09:50:10.649813+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 09:50:10.650042+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 10:00:52.175785+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 10:00:52.175806+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 10:05:20.032884+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 10:05:20.032967+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 10:15:08.336333+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 10:15:08.336341+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 10:17:44.512484+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 10:17:44.512491+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 20:50:27.929772+0700  localhost loginwindow[170]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 20:50:27.929792+0700  localhost loginwindow[170]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 14:19:56.697793+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 14:19:56.697869+0700  localhost loginwindow[169]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+2026-10-27 14:28:29.158453+0700  localhost loginwindow[168]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:] | Zero authref
+2026-10-27 14:28:29.158460+0700  localhost loginwindow[168]: [com.apple.loginwindow.logging:Standard] -[LoginAuthRefMgr clearPasswordAndSetAppleKeyStoreIfNeeded:]_block_invoke | On thread, calling to check FMM creds
+
+[1;33m[3.2] Media Capabilities (H264/HEVC/AV1 Zero-Copy)[0m
+  No media capability entries found
+
+[0;32m✅ CAT 3 Complete[0m
+
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;34m🧹 CAT 4: System Cache Purge & Hard Refresh (Requires sudo)[0m
+[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;31m⚠️  This section requires administrator privileges.[0m
+[0;31m   Enter your password when prompted.[0m
+
+[1;33mRequesting sudo access...[0m
+[1;33m[4.1] Purging displaypolicyd cache[0m
+  ✓ Cleared
+
+[1;33m[4.2] Purging WindowServer display preferences[0m
+  ✓ System plist cleared
+  ✓ User ByHost prefs cleared
+
+[1;33m[4.3] Fixing Kext permissions & rebuilding auxKC[0m
+  ✓ Permissions fixed
+Checking the auxiliary kernel collection...
+Attempting to remove the following extensions (1):
+[-] com.pongpan-bk.MyIntelGPU	4.4.203	/Library/Extensions/MyIntelGPU.kext
+Requesting user approval (times out in 60 seconds)...
+  ⚠ kmutil rebuild failed
+
+[0;32m✅ CAT 4 Complete[0m
+
+[0;36m╔══════════════════════════════════════════════════════════════════╗[0m
+[0;36m║                        DIAGNOSTIC COMPLETE                       ║[0m
+[0;36m╚══════════════════════════════════════════════════════════════════╝[0m
+
+[1;33m📋 Summary saved to: /Users/ppbk/Desktop/MyIntelGPU_Diagnostics_20261027_142932.log[0m
+
+[0;36mNext steps:[0m
+  1. Review the log output above for errors/warnings
+  2. Check /Users/ppbk/Desktop/MyIntelGPU_Diagnostics_20261027_142932.log for full details
+  3. If CAT 4 ran successfully, REBOOT now to apply cache purge
+
+[0;32mPress any key to close...[0m
