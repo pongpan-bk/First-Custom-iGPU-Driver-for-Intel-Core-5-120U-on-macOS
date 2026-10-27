@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>MyIntelGPU</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.pongpan-bk.MyIntelGPU</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MyIntelGPU</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>4.3.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>4.4.163</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>Universal_AutoMatch_GPU</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.pongpan-bk.MyIntelGPU</string>
+			<key>IOClass</key>
+			<string>MyIntelGPU</string>
+			<key>IOGLBundleName</key>
+			<string>AppleIntelKBLGraphicsGLDriver</string>
+			<key>IOMatchCategory</key>
+			<string>IOAccelerator</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
+			<key>IOPCIMatch</key>
+			<string>0xa7ac8086</string>
+			<key>IOProbeScore</key>
+			<integer>20000</integer>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+			<key>IOVARendererID</key>
+			<data>
+			rKcAAA==
+			</data>
+			<key>MetalPlugin</key>
+			<string>MyIntelGPUMTLDriver.bundle</string>
+			<key>MetalStatisticsName</key>
+			<string>Intel Raptor Lake-P</string>
+			<key>model</key>
+			<string>Intel Raptor Lake-P</string>
+		</dict>
+	</dict>
+	<key>MaxKernel</key>
+	<string></string>
+	<key>MinKernel</key>
+	<string>22.0.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 pongpan-bk. All rights reserved.</string>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>597</string>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>2.9</string>
+		<key>com.apple.iokit.IOSurface</key>
+		<string>1.0</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>22.6.6</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>22.6.6</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>22.6.6</string>
+		<key>com.apple.kpi.mach</key>
+		<string>22.6.6</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>22.6.6</string>
+	</dict>
+</dict>
+</plist>
