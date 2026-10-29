@@ -1,17 +1,15 @@
-กูเลิกทำแล้วววววววววว
-
 <div align="center">
 
 # ⚡ MYINTELGPU — HONEST IDENTITY DRIVER
 
 ### Custom macOS Kernel Extension for Intel Gen 12 / Raptor Lake-U iGPU
 
-[![Built with OpenCode](https://img.shields.io/badge/Built%20with-OpenCode-7C3AED?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==)](https://opencode.ai)
-[![Architecture](https://shields.io)](https://github.com/pongpan-bk)
-[![Platform](https://shields.io)](https://github.com/pongpan-bk)
+[![Built with OpenCode](https://shields.io)](https://opencode.ai)
+[![Architecture: Gen12 Alder/Raptor](https://shields.io)](https://github.com)
+[![Target OS: macOS](https://shields.io)](https://github.com)
 
 <p align="center">
-  <b>A standalone, hardware-level driver ported from i915 register knowledge. Engineered from scratch to run supported graphics endpoints on hardware Apple never implemented.</b>
+  <b>A standalone, hardware-level driver ported from Linux i915 register knowledge. Engineered from scratch to run supported graphics endpoints on hardware Apple never implemented.</b>
 </p>
 
 </div>
@@ -20,37 +18,38 @@
 
 ## 📖 Overview
 
-**MyIntelGPU** เป็นไดรเวอร์ (Kernel Extension) ขนาดกึ่งสแตนด์อโลนสำหรับกราฟิกออนบอร์ด **Intel Core 5 120U (Device ID: `0xA7AC`)** ที่รันบนระบบปฏิบัติการ macOS พัฒนาขึ้นโดยการพอร์ตองค์ความรู้การจัดการรีจิสเตอร์จากระบบบัสลินุกซ์ (i915 Driver Base) 
+**MyIntelGPU** เป็นไดรเวอร์ระบบในระดับเคอร์เนล (Kernel Extension) ขนาดกึ่งสแตนด์อโลน (Semi-Standalone) ที่ถูกสร้างขึ้นมาเพื่อขับเคลื่อนชิปกราฟิกออนบอร์ด **Intel Core 5 120U (Device ID: `0xA7AC`)** บนระบบปฏิบัติการ macOS โดยใช้วิธีพอร์ตองค์ความรู้การจัดการรีจิสเตอร์และการควบคุมบัสจากโครงสร้างไดรเวอร์ `i915` บน Linux Kernel ดั้งเดิม
 
-ความพิเศษของไดรเวอร์ตัวนี้คือการรันด้วย **Honest Identity (ตัวตนที่แท้จริง)** โดยตัวไฟล์ `Info.plist` จะทำการเคลมสิทธิ์และจับคู่พอร์ตอุปกรณ์กราฟิก (IOKit Personality Matching) ด้วยค่า PCI Device ID ของตัวมันเองโดยตรง **ทำให้ระบบโหลดทำงานได้เองที่ `/Library/Extensions` โดยไม่ต้องพึ่งพาการทำ FakeID หรือโกงค่าผ่าน OpenCore Device Properties** ให้ระบบแปรปรวน
+### 🛑 No More Spoofing / No FakeID
+ความโดดเด่นที่สุดของโปรเจกต์นี้คือการทำงานด้วยกลไก **Honest Identity (ตัวตนที่แท้จริง)** ผ่านการทำไฟล์ `Info.plist` ให้เข้าไปจับคู่พอร์ตอุปกรณ์และเคลมสิทธิ์โดยตรง (IOKit Personality Matching) ด้วยค่า PCI Device ID ตรงตามซิลิคอนจริง **ทำให้ตัวไดรเวอร์สามารถโหลดและทำงานได้ทันทีที่ไดเรกทอรี `/Library/Extensions` โดยไม่ต้องพึ่งพาการ Spoof ค่าแต่อย่างใด** ส่งผลให้ระบบทำงานได้เสถียรและแม่นยำสูงสุดขอบเขตฮาร์ดแวร์
 
 ---
 
-## 🛠️ What's Inside
+## 🛠️ โครงสร้างสถาปัตยกรรมภายใน (What's Inside)
 
-โครงสร้างสถาปัตยกรรมภายในประกอบด้วยระบบควบคุม Display-First และการจัดการวงแหวนคำสั่งระดับ Bare-Metal:
+ตัวไดรเวอร์ถูกออกแบบโครงสร้างระดับ Bare-Metal แยกออกจากระบบสั่งงานสากล เพื่อควบคุมท่อสัญญาณการประมวลผลและการแสดงผลโดยตรง:
 
-- **Memory Management:** ระบบจัดสรรหน่วยความจำภายใน GGTT/GSM Initialization, การจัดการ VRAM Pool ขนาด 4096 MB และการผูกค่าสิทธิ์โหนด GEM Buffers
-- **Command Streamers:** ระบบควบคุมคิววงแหวนคำสั่งหลัก RCS (Render) และ BCS (Blitter) ผ่านกลไกการส่งคำสั่งตรงแบบ Execlists (Logical Ring Context - LRC)
-- **Interrupt Plumbing:** ระบบท่อส่งสัญญาณขัดจังหวะฮาร์ดแวร์ Gen11+ GT Interrupt Plumbing แบบสมบูรณ์
-- **Diagnostics:** ระบบตรวจสอบและดักจับเฟรมบัฟเฟอร์ (Display-State Framebuffer Snapshot) สำหรับการสแกนสัญญาณจอโน้ตบุ๊กผ่านพอร์ตลอจิกภายใน
+*   **Memory Management:** ระบบจัดสรรและเตรียมความพร้อมหน่วยความจำผ่านกลไก GGTT/GSM Initialization, การตั้งค่า VRAM Pool ขนาดทดสอบ 4096 MB และระบบผูกสิทธิ์สัญญานโหนด GEM Buffers
+*   **Command Streamers:** ชุดควบคุมคิววงแหวนคำสั่งประมวลผลหลัก RCS (Render) และ BCS (Blitter) วิ่งตรงผ่านระบบส่งคำสั่งทางลัด Execlists (Logical Ring Context - LRC)
+*   **Interrupt Plumbing:** การต่อท่อสัญญาณขัดจังหวะระบบฮาร์ดแวร์หลัก (Gen11+ GT Interrupt Plumbing) แบบสมบูรณ์ไร้รอยต่อ
+*   **Display Diagnostics:** โหมดสแกนและดักจับเฟรมบัฟเฟอร์ (Display-State Framebuffer Snapshot) เพื่อสแกนสัญญาณพอร์ตควบคุมหน้าจอภายในของโน้ตบุ๊กโดยเฉพาะ
 
-> ⚠️ **Note:** ตัวแปรสัญญลักษณ์คงที่ (Source-level constants) บางส่วนภายในซอร์สโค้ดถูกบีบอัดและปิดบังเพื่อความปลอดภัยเชิงระบบ และไฟล์ `Info.plist` บรรจุค่าไบนารี Device ID ตรงตัวสำหรับการสู้สิทธิ์ IOKit
+> ⚠️ **Note:** ตัวแปรสัญลักษณ์คงที่ (Source-level constants) และข้อมูลจำเพาะทางเทคนิคบางส่วนในซอร์สโค้ดถูกบีบอัดและปิดบังเพื่อความปลอดภัยเชิงระบบ โดยไฟล์ `Info.plist` จะทำหน้าที่บรรจุค่าไบนารี Device ID ตรงตัวเพื่อใช้สู้สิทธิ์บนระบบ IOKit ของ macOS
 
 ---
 
 ## 🔬 Architectural Deep-Dive & Low-Level Fixes
 
 ### 1. The Silicon Reality (Alder Lake-P Roots)
-จากการสืบค้นประวัติระดับ Bare-Metal บล็อกสถาปัตยกรรมประมวลผลกราฟิก (Silicon Subsystem) ของชิป Core 5 120U ถูกยืนยันว่าทำงานอยู่บนฐานรากของ **Intel Alder Lake-P (Gen 12)** ทำให้ไดรเวอร์ตัวนี้สามารถแชร์ตารางแมปข้อมูลพอร์ตและคอนเน็กเตอร์ร่วมกับสถาปัตยกรรม Gen 12 ดั้งเดิมได้ทั้งหมด
+จากการสืบค้นประวัติระดับฮาร์ดแวร์ บล็อกสถาปัตยกรรมประมวลผลกราฟิก (Silicon Subsystem) ของชิป **Core 5 120U** ถูกยืนยันว่าทำงานอยู่บนสถาปัตยกรรมรากเหง้าของ **Intel Alder Lake-P (Gen 12)** ส่งผลให้ไดรเวอร์ชุดนี้สามารถแชร์โครงสร้างตารางข้อมูลพอร์ตและคอนเน็กเตอร์ ร่วมกับชุดคำสั่ง Gen 12 แบบดั้งเดิมได้ทั้งหมดอย่างแม่นยำ
 
-### 2. The Bit-Shift & Memory Corruption Repair (`0x71000013` Bug)
-ในการส่งคำสั่งควบคุมระดับล่างตรงเข้าหาท่อส่ง **VCS Ring (VDBOX)** ข้ามระบบคำสั่งส่วนหน้าของ Metal และ VideoToolbox ตัวแอดเดรสหน่วยความจำ 64 บิตจะต้องส่งค่าผ่านบัฟเฟอร์คำสั่งตรงๆ โดยไม่มีการเลื่อนตำแหน่งบิต 
+### 2. การซ่อมแซมบั๊ก Bit-Shift & Memory Corruption (`0x71000013` Bug)
+ในการยิงคำสั่งประมวลผลวิดีโอระดับล่างตรงเข้าหาท่อส่ง **VCS Ring (VDBOX)** ข้ามเลเยอร์คำสั่งของ Metal และ VideoToolbox ตัวแอดเดรสหน่วยความจำ 64 บิตจะต้องส่งค่าผ่านบัฟเฟอร์คำสั่งตรงๆ โดยไม่มีการเลื่อนตำแหน่งบิต 
 
-ไดรเวอร์ตัวนี้ได้ทำการแก้ไขบั๊กตัวจัดการตำแหน่งหน่วยความจำที่ผิดพลาด (`>> 6` Bit-Shift Error) โดยเปลี่ยนมาใช้ระบบล้างเศษบิตล่าง 6 บิตเพื่อตรึงตำแหน่งแอดเดรสภาพ Luma และพื้นที่ Scratch (`kScrIntra` / `kScrDeblock`) ให้ลงล็อกขอบเขต 64-byte อย่างแม่นยำตามกลไกบัสฮาร์ดแวร์แท้:
+ไดรเวอร์ตัวนี้ได้ทำการแก้ไขบั๊กตัวจัดการตำแหน่งหน่วยความจำที่ผิดพลาด (`>> 6` Bit-Shift Error) โดยเปลี่ยนมาใช้ระบบล้างเศษบิตล่าง 6 บิต เพื่อตรึงตำแหน่งแอดเดรสภาพ Luma และพื้นที่ Scratch บัฟเฟอร์ (`kScrIntra` / `kScrDeblock`) ให้ลงล็อกขอบเขต 64-byte พอดีตามข้อกำหนดสถาปัตยกรรมฮาร์ดแวร์:
 
 ```cpp
-// ล้างเฉพาะ 6 บิตล่างเพื่อล็อกขอบเขตสถาปัตยกรรมหน่วยความจำกราฟิก Gen 12
+// ล้างเฉพาะ 6 บิตล่างเพื่อล็อกขอบเขตแอดเดรสหน่วยความจำกราฟิก Gen 12
 static constexpr uint64_t kMhwAddressMask = ~0x3FULL;
 
 void writeVcsRingAddress64(uint32_t *commandBuffer, size_t dwIndex, uint64_t gpuAddress) {
@@ -59,31 +58,32 @@ void writeVcsRingAddress64(uint32_t *commandBuffer, size_t dwIndex, uint64_t gpu
     commandBuffer[dwIndex + 1] = (uint32_t)(alignedAddress >> 32);         // High DWORD
 }
 ```
-ผลลัพธ์นี้ช่วยแก้ไขปัญหาภาพเป็นพิษ (Poison Frame) ส่งผลให้ท่อส่งประมวลผลสามารถดันงานภาพระดับความละเอียดสูง (เช่น **8K HDR IMAX** บน YouTube) วิ่งตรงเข้าชิปการ์ดจอได้ทันที โดยที่กระบวนการระบบส่วนกลางอย่าง `WindowServer` ไม่เกิดอาการโหลดล้นหลอด
+
+**ผลลัพธ์หลังการแก้ไข:** ระบบสามารถส่งผ่านบัฟเฟอร์วิดีโอความละเอียดสูงพิเศษ (เช่น สตรีมวิดีโอระบบ **8K HDR IMAX** บน YouTube) วิ่งตรงเข้าชิปถอดรหัสฮาร์ดแวร์ 80 EUs ได้ทันทีอย่างราบรื่น โดยไม่ทำให้โปรเซสจัดการหน้าต่างส่วนกลางอย่าง `WindowServer` เกิดอาการโหลดล้นหรือเกิดอาการหน้าจอค้าง (Poison Frame) อีกต่อไป
 
 ---
 
-## 🏗️ Build & Installation
+## 🏗️ วิธีการคอมไพล์และการติดตั้ง (Build & Installation)
 
-### Prerequisite
-การคอมไพล์ซอร์สโค้ดจำเป็นต้องใช้เครื่องมือ **Xcode Command Line Tools** ควบคู่กับชุดพัฒนา **MacKernelSDK** (จัดวางไว้ที่โฟลเดอร์ `~/MacKernelSDK` หรือ `/opt/MacKernelSDK`)
+### เครื่องมือที่จำเป็น (Prerequisites)
+การคอมไพล์ซอร์สโค้ดจำเป็นต้องใช้เครื่องมือ **Xcode Command Line Tools** ควบคู่กับชุดพัฒนาเคอร์เนล **MacKernelSDK** (แนะนำให้จัดวางไว้ที่โฟลเดอร์ `~/MacKernelSDK` หรือ `/opt/MacKernelSDK`)
 
-### Compiling
+### ขั้นตอนการคอมไพล์ (Compiling)
 ```bash
-git clone https://github.com/pongpan-bk/MyIntelGPU-MacDriver-HonestBridge
+git clone https://github.com/MyIntelGPU-MacDriver-HonestBridge
 cd MyIntelGPU-MacDriver-HonestBridge
 make
 ```
 
-### Deployment
-> 🚨 **Disclaimer:** นี่คือโค้ดระดับ Kernel ที่จัดการฮาร์ดแวร์โดยตรง การติดตั้งและรันไฟล์มีความเสี่ยงต่อระบบ ผู้ใช้งานโปรดรับความเสี่ยงด้วยตนเอง
+### ขั้นตอนการติดตั้ง (Deployment)
+> 🚨 **Disclaimer:** นี่คือโค้ดระดับเคอร์เนลที่จัดการและควบคุมฮาร์ดแวร์โดยตรง การติดตั้งและรันไฟล์มีความเสี่ยงต่อตัวระบบ ผู้ใช้งานโปรดรับความเสี่ยงในการทดสอบด้วยตนเอง
 
 ```bash
-# ตั้งค่าสิทธิ์ไฟล์ระบบให้ถูกต้อง (Root:Wheel)
+# 1. ตั้งค่าสิทธิ์ไฟล์ระบบให้ถูกต้องตามข้อกำหนดเคอร์เนล (Root:Wheel)
 sudo chown -R root:wheel MyIntelGPU.kext
 sudo chmod -R 755 MyIntelGPU.kext
 
-# คัดลอกเข้าไดเรกทอรีส่วนขยายระบบและสั่งอัปเดตแคช
+# 2. คัดลอกเข้าไดเรกทอรีส่วนขยายระบบและสั่งอัปเดตระบบแคชเคอร์เนล
 sudo cp -R MyIntelGPU.kext /Library/Extensions/
 sudo kmutil install --volume-root /
 ```
@@ -92,12 +92,10 @@ sudo kmutil install --volume-root /
 
 ## 🤖 Credits & Tooling
 
-- **Lead Developer:** [pongpan-bk](https://github.com/pongpan-bk)
-- **Core Engineering AI Agent:** [OpenCode AI](https://opencode.ai) — ระบบจัดทำและจัดระเบียบโครงสร้างคำสั่งคิว Execlists, ตัวลงทะเบียน Register พอร์ตควบคุม และท่อส่งสัญญาณ Interrupt ตั้งแต่เริ่มต้นจนจบกระบวนการ (End-to-End Core Synthesis)
+*   **Lead Developer & Hardware Analyst:** [pongpan-bk](https://github.com) - ผู้ออกแบบและวางโครงสร้างการเจาะระบบท่อส่งข้อมูลการ์ดจอ Gen 12 บน macOS
+*   **Core Engineering AI Agent:** [OpenCode AI](https://opencode.ai) - ระบบผู้ช่วยวิเคราะห์และจัดระเบียบโครงสร้างคำสั่งคิว Execlists, ตัวลงทะเบียนพอร์ตควบคุมตำแหน่งรีจิสเตอร์ และคำนวณสัญญาณท่อขัดจังหวะระบบ (End-to-End Core Synthesis)
 
 ---
 <div align="center">
-  Developed with ❤️ by pongpan-bk · Contact Developer: <a href="https://facebook.com">Facebook</a>
+  Developed with ❤️ by pongpan-bk · Contact Developer via <a href="https://facebook.com">Facebook</a>
 </div>
-
-https://www.facebook.com/je4bs
