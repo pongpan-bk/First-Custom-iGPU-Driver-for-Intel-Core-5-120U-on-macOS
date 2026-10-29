@@ -69,11 +69,13 @@ void writeVcsRingAddress64(uint32_t *commandBuffer, size_t dwIndex, uint64_t gpu
 การคอมไพล์ซอร์สโค้ดจำเป็นต้องใช้เครื่องมือ **Xcode Command Line Tools** ควบคู่กับชุดพัฒนาเคอร์เนล **MacKernelSDK** (แนะนำให้จัดวางไว้ที่โฟลเดอร์ `~/MacKernelSDK` หรือ `/opt/MacKernelSDK`)
 
 ### ขั้นตอนการคอมไพล์ (Compiling)
+
 ```bash
-git clone https://github.com/MyIntelGPU-MacDriver-HonestBridge
-cd MyIntelGPU-MacDriver-HonestBridge
+git clone https://github.com
+cd First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS
 make
 ```
+
 
 ### ขั้นตอนการติดตั้ง (Deployment)
 > 🚨 **Disclaimer:** นี่คือโค้ดระดับเคอร์เนลที่จัดการและควบคุมฮาร์ดแวร์โดยตรง การติดตั้งและรันไฟล์มีความเสี่ยงต่อตัวระบบ ผู้ใช้งานโปรดรับความเสี่ยงในการทดสอบด้วยตนเอง
