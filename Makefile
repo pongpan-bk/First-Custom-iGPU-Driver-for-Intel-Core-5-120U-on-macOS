@@ -100,8 +100,6 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: 220,000 bytes (เพิ่มจาก 216,000 — 2026-10-29; doEngineResetCore
-# refactor เพิ่ม ~1.8 KB; ยังอยู่ใน kernel page ที่ปลอดภัย)
 # Size budget: 216,000 bytes (user 2026-10-23; 210,000 ก่อนหน้า 2026-10-20
 # เพราะ __TEXT เต็มหน้าพอดี — 4.4.173 เพิ่ม BCS fence + vblank bridge 3.6KB
 # ซึ่งดัน __TEXT ขึ้นอีก 1 หน้า; gate เดิมเข้มกว่าเพดานจริงของ KC โดยไม่มีเหตุผล)
@@ -152,37 +150,32 @@ LDFLAGS = -flto \
           -Xlinker -exported_symbols_list \
           -Xlinker $(CURDIR)/exported_symbols.txt
 
-# ─── Sources (Pure Native — 12 files, no Lilu plugin shim) ───────
-# IntelFramebuffer.cpp is REQUIRED: MyIntelGPU.cpp calls
-# IntelFramebuffer::initInterrupts / handleInterrupt / enableVblankInterrupt /
-# disableInterrupts / dumpDiagnostics. Commit bae5052 deleted it as "obsolete"
-# but the call sites remained, leaving 8 undefined C++ symbols in the kext.
-# A kext with unresolved externals is rejected by OSKext::load — the driver
-# silently never appears in kextstat (observed 2026-10-28). Kept restored.
-SRC = MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
+# ─── Sources (Pure Native — 11 files, no Lilu plugin shim) ───────
+SRC = MyIntelGPU.cpp MyIntelFramebuffer.cpp \
       MyIntelAccelerator.cpp MyIntelMedia.cpp \
       MyIntelRing.cpp MyIntelGEMBuffer.cpp MyIntelGPUClient.cpp \
       MyIntelVCSCommand.cpp MyIntelVCSClient.cpp \
       MyIntelEDIDParser.cpp
-OBJ = MyIntelGPU.o IntelFramebuffer.o MyIntelFramebuffer.o MyIntelMedia.o \
+OBJ = MyIntelGPU.o MyIntelFramebuffer.o MyIntelMedia.o \
       MyIntelAccelerator.o MyIntelRing.o MyIntelGEMBuffer.o MyIntelGPUClient.o \
       MyIntelVCSCommand.o MyIntelVCSClient.o \
       MyIntelEDIDParser.o
 
-.PHONY: all clean install load unload lint format version strip_binary tools FORCE package-plugin
+# ─── Metal driver plugin bundle ──────────────────────────────────
+# MyIntelAccelerator.cpp sets MetalPluginName="MyIntelGPUMTLDriver" at runtime,
+# so that bundle MUST sit inside the kext's Contents/PlugIns/ for Metal to
+# resolve it. Shipping it beside the kext leaves MetalPluginName dangling —
+# System Profiler then reports "Metal: Supported" off the plist string alone
+# while no MTLDevice is ever created.
+PLUGIN_BUNDLE := MyIntelGPUMTLDriver.bundle
+KEXT_PLUGINS  := $(TARGET).kext/Contents/PlugIns
+PLUGIN_DEST   := $(KEXT_PLUGINS)/$(PLUGIN_BUNDLE)
+
+.PHONY: all clean install load unload lint format version strip_binary tools FORCE
 
 .DEFAULT_GOAL := all
 
-all: $(TARGET).kext/Contents/MacOS/$(TARGET) package-plugin
-
-# Preserve the standalone Metal plugin in every freshly assembled kext.
-# The all-in-one build script stages this tracked bundle beside the sources.
-package-plugin: $(TARGET).kext/Contents/MacOS/$(TARGET)
-	test -f MyIntelGPUMTLDriver.bundle/Contents/Info.plist
-	test -f MyIntelGPUMTLDriver.bundle/Contents/MacOS/MyIntelGPUMTLDriver
-	mkdir -p "$(TARGET).kext/Contents/PlugIns"
-	ditto MyIntelGPUMTLDriver.bundle \
-	      "$(TARGET).kext/Contents/PlugIns/MyIntelGPUMTLDriver.bundle"
+all: $(TARGET).kext/Contents/MacOS/$(TARGET) $(PLUGIN_DEST)
 
 # ─── Compile ─────────────────────────────────────────────────────
 # Every object depends on the generated version header so a CFBundleVersion
@@ -205,11 +198,18 @@ $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.pli
 	# strip -x -S "$@"
 	ls -la "$(TARGET).kext/Contents/MacOS/"
 	@actual=$$(stat -f%z "$@"); \
-	if [ "$$actual" -gt 220000 ]; then \
-		echo "ERROR: binary $$actual bytes > 220000 budget — build rejected"; exit 1; \
+	if [ "$$actual" -gt 216000 ]; then \
+		echo "ERROR: binary $$actual bytes > 216000 budget — build rejected"; exit 1; \
 	else \
-		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤220000) ───"; \
+		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤216000) ───"; \
 	fi
+
+# ─── Embed Metal plugin bundle ───────────────────────────────────
+$(PLUGIN_DEST): $(PLUGIN_BUNDLE)/Contents/Info.plist $(PLUGIN_BUNDLE)/Contents/MacOS/MyIntelGPUMTLDriver
+	@mkdir -p "$(KEXT_PLUGINS)"
+	rm -rf "$(PLUGIN_DEST)"
+	cp -R "$(PLUGIN_BUNDLE)" "$(PLUGIN_DEST)"
+	@echo "   embedded plugin: $(PLUGIN_DEST)"
 
 # ─── Utilities ───────────────────────────────────────────────────
 clean:
@@ -261,7 +261,7 @@ strip_binary:
 
 # ─── File Size Check ──────────────────────────────────────────────
 sizecheck:
-	@maxsize=220000; \
+	@maxsize=216000; \
 	actual=$$(stat -f%z "$(TARGET).kext/Contents/MacOS/$(TARGET)" 2>/dev/null || echo 0); \
 	if [ "$$actual" -gt "$$maxsize" ]; then \
 		echo "WARNING: Binary $$actual bytes exceeds $$maxsize — check for bloat"; \
