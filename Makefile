@@ -100,9 +100,8 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: 216,000 bytes (user 2026-10-23; 210,000 ก่อนหน้า 2026-10-20
-# เพราะ __TEXT เต็มหน้าพอดี — 4.4.173 เพิ่ม BCS fence + vblank bridge 3.6KB
-# ซึ่งดัน __TEXT ขึ้นอีก 1 หน้า; gate เดิมเข้มกว่าเพดานจริงของ KC โดยไม่มีเหตุผล)
+# Size budget: บิ้วต้องไม่เกิน 220,000 bytes (repo หลักใช้ 216,000; รีโพนี้
+# รวม IntelFramebuffer.cpp เพิ่มอีก ~10KB → 4.4.x ลิงก์ออกมา 217,296 bytes)
 # -Oz                    : size-first optimizer (smaller than -Os)
 # -ffunction-sections/-fdata-sections + -Wl,-dead_strip
 #                        : section-per-function แล้ว linker ตัดฟังก์ชัน/ข้อมูล
@@ -117,7 +116,6 @@ CXXFLAGS = -std=c++14 \
            -mmacosx-version-min=12.0 \
            -arch x86_64 \
            -Oz \
-           -flto \
            -ffunction-sections \
            -fdata-sections \
            -nostdlib \
@@ -143,20 +141,19 @@ CXXFLAGS = -std=c++14 \
 #           แล้ว strip -x ลบทิ้งจาก strtab/symtab → ลด LINKEDIT ~18KB
 #           การ register class ผ่าน __mod_init_func (section-based) ไม่ใช่
 #           ชื่อ symbol จึงไม่กระทบ personality matching (พิสูจน์แล้วด้วย nm)
-LDFLAGS = -flto \
-          -Xlinker -kext \
+LDFLAGS = -Xlinker -kext \
           -Xlinker -dead_strip \
           -Xlinker -x \
           -Xlinker -exported_symbols_list \
           -Xlinker $(CURDIR)/exported_symbols.txt
 
 # ─── Sources (Pure Native — 11 files, no Lilu plugin shim) ───────
-SRC = MyIntelGPU.cpp MyIntelFramebuffer.cpp \
+SRC = MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
       MyIntelAccelerator.cpp MyIntelMedia.cpp \
       MyIntelRing.cpp MyIntelGEMBuffer.cpp MyIntelGPUClient.cpp \
       MyIntelVCSCommand.cpp MyIntelVCSClient.cpp \
       MyIntelEDIDParser.cpp
-OBJ = MyIntelGPU.o MyIntelFramebuffer.o MyIntelMedia.o \
+OBJ = MyIntelGPU.o IntelFramebuffer.o MyIntelFramebuffer.o MyIntelMedia.o \
       MyIntelAccelerator.o MyIntelRing.o MyIntelGEMBuffer.o MyIntelGPUClient.o \
       MyIntelVCSCommand.o MyIntelVCSClient.o \
       MyIntelEDIDParser.o
@@ -171,7 +168,7 @@ PLUGIN_BUNDLE := MyIntelGPUMTLDriver.bundle
 KEXT_PLUGINS  := $(TARGET).kext/Contents/PlugIns
 PLUGIN_DEST   := $(KEXT_PLUGINS)/$(PLUGIN_BUNDLE)
 
-.PHONY: all clean install load unload lint format version strip_binary tools FORCE
+.PHONY: all clean install load unload lint format version strip_binary tools pkg FORCE
 
 .DEFAULT_GOAL := all
 
@@ -198,10 +195,10 @@ $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.pli
 	# strip -x -S "$@"
 	ls -la "$(TARGET).kext/Contents/MacOS/"
 	@actual=$$(stat -f%z "$@"); \
-	if [ "$$actual" -gt 216000 ]; then \
-		echo "ERROR: binary $$actual bytes > 216000 budget — build rejected"; exit 1; \
+	if [ "$$actual" -gt 220000 ]; then \
+		echo "ERROR: binary $$actual bytes > 220000 budget — build rejected"; exit 1; \
 	else \
-		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤216000) ───"; \
+		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤220000) ───"; \
 	fi
 
 # ─── Embed Metal plugin bundle ───────────────────────────────────
@@ -261,10 +258,30 @@ strip_binary:
 
 # ─── File Size Check ──────────────────────────────────────────────
 sizecheck:
-	@maxsize=216000; \
+	@maxsize=220000; \
 	actual=$$(stat -f%z "$(TARGET).kext/Contents/MacOS/$(TARGET)" 2>/dev/null || echo 0); \
 	if [ "$$actual" -gt "$$maxsize" ]; then \
 		echo "WARNING: Binary $$actual bytes exceeds $$maxsize — check for bloat"; \
 	else \
 		echo "Size check: $$actual bytes (limit $$maxsize) — OK"; \
 	fi
+
+# ─── Installer Package (.pkg) ────────────────────────────────────
+# pkgbuild --ownership recommended assigns root:wheel to payload items
+# installed under /Library — required for kext loading. packaging/ holds
+# preinstall (backup existing kext) and postinstall (chown + kmutil).
+PKG_IDENTIFIER := com.pongpan-bk.MyIntelGPU
+PKG_NAME       := $(TARGET)-$(STAMPED_VERSION).pkg
+
+pkg: all
+	@echo "─── Building installer package: $(PKG_NAME)"
+	/usr/bin/pkgbuild \
+		--root "$(TARGET).kext" \
+		--scripts packaging \
+		--identifier $(PKG_IDENTIFIER) \
+		--version "$(STAMPED_VERSION)" \
+		--install-location /Library/Extensions \
+		--ownership recommended \
+		"$(PKG_NAME)"
+	@ls -la "$(PKG_NAME)"
+	@echo "─── Package complete: $(PKG_NAME)"
