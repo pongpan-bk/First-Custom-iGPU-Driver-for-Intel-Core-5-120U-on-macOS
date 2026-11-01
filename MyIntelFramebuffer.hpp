@@ -148,6 +148,7 @@ private:
     UInt32               fPowerOnCount;   /*!< performPowerStateChange ON */
     UInt32               fPowerOffCount;  /*!< performPowerStateChange OFF */
     UInt32               fApertureCount;  /*!< getApertureRange calls */
+    UInt32               fLocationRetry;  /*!< location timer retry count (stops after 5 retries) */
     IOTimerEventSource  *fLocationTimer;
     static void locationTimerFired(OSObject *owner, IOTimerEventSource *sender);
 

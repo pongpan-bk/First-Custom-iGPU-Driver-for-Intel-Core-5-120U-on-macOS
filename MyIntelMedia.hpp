@@ -91,11 +91,10 @@ typedef enum {
  *  (ใช้ใน initMediaEngines เพื่อ track ว่า VDBOX
  *   ไหนถูก initialize แล้วบ้าง)
  *
- *  VDBOX index mapping (RPL-P):
- *    Index 0: VCS0  @ 0x1C0000  — MFX0 (H.264/HEVC/AV1/VP9)
- *    Index 1: VCS1  @ 0x1C4000  — MFX1 (same) — ถ้ามี
- *    Index 2: VCS2  @ 0x1D0000  — MFX2 — higher SKU
- *    Index 3: VCS3  @ 0x1D4000  — MFX3
+ *  Physical MMIO mapping for the RPL-U profile (i915 engine identifiers):
+ *    VCS0 @ 0x1C0000 — first enumerated VDBOX
+ *    VCS2 @ 0x1D0000 — second enumerated VDBOX (Linux UABI may call it vcs1)
+ *    VCS1 @ 0x1C4000 and VCS3 @ 0x1D4000 are not enumerated for this profile.
  * ─────────────────────────────────────────────
  */
 typedef struct {
@@ -104,7 +103,7 @@ typedef struct {
     uint32_t  auxInvReg;      /*!< AUX Invalidate register address */
     uint8_t   index;          /*!< Instance index (0-3) */
     bool      hasSfc;         /*!< true if this VDBOX has SFC (Gen12+) */
-    bool      initialized;    /*!< true after init */
+    bool      enumerated;     /*!< true when present in the selected platform topology */
 } MyIntelMediaVdboxInfo;
 
 /*
@@ -113,16 +112,15 @@ typedef struct {
  *
  *  สถานะของ VEBOX engine แต่ละ instance
  *
- *  Index mapping (RPL-P):
- *    Index 0: VECS0 @ 0x1C8000  — VEBOX0 (H.264/HEVC encode)
- *    Index 1: VECS1 @ 0x1D8000  — VEBOX1 — ถ้ามี
+ *  RPL-U profile: VECS0 @ 0x1C8000 is enumerated; VECS1 @ 0x1D8000 is not.
+ *  Enumeration does not imply a working command-submission path.
  * ─────────────────────────────────────────────
  */
 typedef struct {
     uint32_t  mmioBase;       /*!< VEBOX MMIO base address */
     uint32_t  auxInvReg;      /*!< AUX Invalidate register address */
     uint8_t   index;          /*!< Instance index (0-1) */
-    bool      initialized;    /*!< true after init */
+    bool      enumerated;     /*!< true when present in the selected platform topology */
 } MyIntelMediaVeboxInfo;
 
 #pragma mark - SFC (Scalable Format Converter)
@@ -243,24 +241,22 @@ typedef enum {
  * ─────────────────────────────────────────────
  *  MFX Pipe Clock Gating Control
  *
- *  VDBOX global registers (base + 0x6000 + offset)
+ *  VDBOX instance registers (mmio_base + offset)
  *  ใช้ disable clock gating สำหรับบางหน่วยที่จำเป็น
  *  ระหว่าง media engine bringup
  *
- *  Reference: i915_reg.h — VDBOX_CGCTL3F10, VDBOX_CGCTL3F18
- *             xe_media.c — media_gt_init
+ *  Reference: i915 gt/intel_engine_regs.h:255 — VDBOX_CGCTL3F10,
+ *             VDBOX_CGCTL3F18 (offsets relative to engine mmio_base)
  * ─────────────────────────────────────────────
  */
 
-/* Clock gating register offsets from VDBOX global base (base + 0x6000) */
+/* Clock gating register offsets from the VDBOX instance mmio_base */
 #define VDBOX_CGCTL_3F10_OFF    0x3F10    /* IECP clock gate */
 #define VDBOX_CGCTL_3F18_OFF    0x3F18    /* ALN clock gate */
-#define VDBOX_CGCTL_3F1C_OFF    0x3F1C    /* MFXPIPE clock gate */
 
 /* Bit definitions */
 #define VDBOX_CGCTL_IECP_DIS    (1U << 22)  /* Disable IECP clock gate */
 #define VDBOX_CGCTL_ALN_DIS     (1U << 13)  /* Disable ALN clock gate */
-#define VDBOX_CGCTL_MFXPIPE_DIS (1U << 3)   /* Disable MFXPIPE clock gate */
 
 #pragma mark - Inline SFC Helpers
 
@@ -375,9 +371,9 @@ static inline uint32_t vdboxBaseForIndex(uint32_t index)
 {
     static const uint32_t bases[] = {
         0x1C0000,  /* VCS0 */
-        0x1C4000,  /* VCS1 */
-        0x1D0000,  /* VCS2 */
-        0x1D4000,  /* VCS3 */
+        0x1D0000,  /* VCS1 — second VDBox (BSD3 slot; verified on a7ac) */
+        0x1C4000,  /* BSD2 — unused on Gen11+ iGPU */
+        0x1D4000,  /* BSD4 — unused on Gen11+ iGPU */
     };
     if (index >= sizeof(bases) / sizeof(bases[0])) return 0;
     return bases[index];

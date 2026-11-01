@@ -23,9 +23,16 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/pci/IOPCIDevice.h>
+/* kIOInterruptTypePCIMessagedX (MSI-X) was added to IOPCIDevice.h in later
+ * MacKernelSDK versions.  Define the XNU value here as a fallback so older
+ * SDKs still compile; the bit is adjacent to kIOInterruptTypePCIMessaged. */
+#ifndef kIOInterruptTypePCIMessagedX
+#define kIOInterruptTypePCIMessagedX 0x00020000
+#endif
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
 
@@ -88,8 +95,8 @@ enum {
  * VCS0 = 0x12000 VCS0 = 0x1c0000 ← !
  * BCS0 = 0x22000 BCS0 = 0x22000 ()
  * VECS0 = 0x1a000 VECS0 = 0x1c8000 ← !
- * VCS1 = N/A () VCS1 = 0x1c4000
- *    VCS2 = N/A                       VCS2 = 0x1d0000
+ * VCS1 = N/A () VCS1 = 0x1d0000 (BSD3 slot)
+ *    VCS2 = N/A                       VCS2 = —
  *    CCS0 = N/A                       CCS0 = 0x1a000
  *
  * : intel_engine_cs.c __engine_mmio_base()
@@ -101,6 +108,7 @@ enum {
 
 #define VCS0_BASE_REAL 0x1C0000 /* Video Decode Gen12+ () */
 #define VCS0_BASE_FAKE 0x12000 /* Coffee Lake () */
+#define VCS2_BASE_REAL 0x1D0000 /* Second enumerated RPL-U VDBOX (i915 VCS2) */
 
 #define BCS0_BASE_REAL 0x22000 /* Blitter — */
 #define BCS0_BASE_FAKE      0x22000
@@ -440,6 +448,27 @@ enum {
 #define FORCEWAKE_MEDIA         0xA270   /* Gen9/10 ONLY — NO single MEDIA domain on Gen11+ (per-VDBOX/VEBOX instead); DO NOT USE here */
 #define FORCEWAKE_ACK_MEDIA     0x0D88   /* Acknowledge: MEDIA domain (FORCEWAKE_ACK_MEDIA_GEN9) */
 
+/*
+ * Gen11+ media forcewake domains — one per VDBOX / VEBOX engine.
+ * Reference: i915 gt/intel_gt_regs.h:917
+ *   FORCEWAKE_MEDIA_VDBOX_GEN11(n)     = 0xA540 + n*4
+ *   FORCEWAKE_MEDIA_VEBOX_GEN11(n)     = 0xA560 + n*4
+ * and gt/intel_gt_regs.h:49
+ *   FORCEWAKE_ACK_MEDIA_VDBOX_GEN11(n) = 0xD50  + n*4
+ *   FORCEWAKE_ACK_MEDIA_VEBOX_GEN11(n) = 0xD70  + n*4
+ *
+ * n is the engine INSTANCE number, not the MMIO slot:
+ *   VCS0  @0x1C0000 → n=0   VCS2 @0x1D0000 → n=2   VECS0 @0x1C8000 → n=0
+ * i915 intel_uncore.c:1349 maps MMIO ranges accordingly:
+ *   0x1C0000-0x1C3FFF → MEDIA_VDBOX0 · 0x1C8000-0x1CFFFF → MEDIA_VEBOX0
+ *   0x1D0000-0x1D3FFF → MEDIA_VDBOX2
+ * Without these, every register inside those ranges reads back 0.
+ */
+#define FORCEWAKE_MEDIA_VDBOX(n)      (0xA540U + (uint32_t)(n) * 4U)
+#define FORCEWAKE_ACK_MEDIA_VDBOX(n)  (0x0D50U + (uint32_t)(n) * 4U)
+#define FORCEWAKE_MEDIA_VEBOX(n)      (0xA560U + (uint32_t)(n) * 4U)
+#define FORCEWAKE_ACK_MEDIA_VEBOX(n)  (0x0D70U + (uint32_t)(n) * 4U)
+
 /* Force Wake domain bits (multicast) */
 #define FW_BIT                  (1U << 0)   /* Bit 0 = request */
 #define FW_MASK                 (1U << 16)  /* Bit 16 = mask */
@@ -447,6 +476,7 @@ enum {
 /* Force Wake timeout */
 #define FW_ACK_TIMEOUT_US       50000   /* 50ms max wait for ACK */
 #define FW_RETRY_MAX            5       /* 2.0.215: forcewake hard-retry rounds before failing */
+#define FW_MEDIA_ACK_TIMEOUT_US 2000    /* 2ms per media domain (i915 media ACK is immediate when the well is on) */
 
 /* RC6 (Render Standby) — GPU deep idle */
 #define RC_CONTROL              0xA090   /* RC6 enable/control */
@@ -933,8 +963,8 @@ public:
  * Flow ( intel_device_info_runtime_init_early()):
  * 1. PCI config space → device ID
  * 2. (ADL-S/P, CFL, TGL, ICL, SKL)
- * 3. ADL → fFakeGen = 9 (Coffee Lake)
- * 4. CFL → fFakeGen = 9 (Native, )
+ * 3. ADL/TGL/RPL → fFakeGen = 12 (native Gen12 MMIO)
+ * 4. CFL → fFakeGen = 9 (native Gen9 MMIO)
  * 5. → fFakeGen = 0 (English mode)
      *
  * GMD_ID register (0xD8C)
@@ -1126,6 +1156,16 @@ public:
      */
     void processEngineInterrupt(uint32_t gt_dw0);
 
+    /*! @brief Drain Gen11+ CSB entries + retire completed HWSP seqnos.
+     *  @param csbWritePtr write pointer from the CSB identity payload
+     *         (0 = read HWS_CSB_WRITE_DWORD from the HWSP page). */
+    void processCsbAndFences(uint32_t csbWritePtr);
+
+    /*! @brief Primary-context filter: ack/disable GT master, defer work to
+     *  the secondary handler.  Returns true only for a GT/display IRQ. */
+    static bool sInterruptFilter(OSObject *owner,
+                                 IOFilterInterruptEventSource *sender);
+
     /*! @brief Static IOKit interrupt trampoline (IOInterruptEventSource) */
     static void sInterruptHandler(OSObject *target,
                                   IOInterruptEventSource *sender,
@@ -1139,6 +1179,9 @@ public:
 
     virtual bool forceWakeGet(void);
     virtual void forceWakePut(void);
+    void mediaForceWakeGet(void);
+    void mediaForceWakePut(void);
+    bool mediaForceWakeAssert(uint32_t vdboxInstance, bool vebox, uint32_t timeoutUs);
     virtual bool rc6Enable(void);
     virtual void rc6Disable(void);
     virtual bool gpuSuspend(void);
@@ -1202,6 +1245,7 @@ public:
     MyIntelRing *getRingRCS(void) const { return fRingRCS; }
     MyIntelRing *getRingBCS(void) const { return fRingBCS; }
     MyIntelRing *getVCSRing(void) const { return fRingVCS; }
+    MyIntelRing *getVCS2Ring(void) const { return fRingVCS2; }
     /* 2.0.255: drop all queued-but-dead batches after an engine reset
      * (takes fEngineLock internally; call with no lock held). */
     void vcsFlushPendingQueue(void);
@@ -1289,7 +1333,10 @@ private:
     static const uint32_t    kEdidMaxRetries = 90; /*!< max EDID injection attempts (0.5s interval => 45s window) */
     uint32_t                 fEdidRetries;         /*!< EDID retry counter (reset on arm, capped at kEdidMaxRetries) */
     bool                     fEdidDebug;           /*!< myedidbg=1: emit [EDID] logs (else silent) */
+    IONotifier              *fEdidNotifier;        /*!< AppleDisplay first-publish match (kills the race) */
     bool                     injectEDIDOnce(void);
+    static bool              sEdidPublished(void *target, void *refCon,
+                                            IOService *newService, IONotifier *notifier);
     static void              sEdidTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void                     armEDIDPassthrough(void);
     /* Phase 4c-1 myplane=1 scanout self-test */
@@ -1331,7 +1378,6 @@ private:
     bool                     accelStepAlloc(uint32_t mode);
     bool                     accelStepAttach(uint32_t parentSel); /*!< 0=this,1=PCI,2=IOResources */
     bool                     accelStepStart(void);
-    bool                     accelPadProps(void);   /*!< Door-A: eGPU-trick property injection */
     /* Hypothesis #10: BCS blit as BATCH+BB_START (proven VDBOX/gem_test pattern) */
     MyIntelGEMBuffer        *fAccelBatchBuf;       /*!< blit batch buffer (lazy alloc) */
     MyIntelGEMBuffer        *fAccelBatchSrcBuf;    /*!< blit source buffer with test pattern (lazy alloc) */
@@ -1390,6 +1436,10 @@ private:
     bool                      fFirstIrqSeen;         /*!< 2.0.226: first master IRQ observed (IRQ path) */
     volatile bool             fInIrqContext;         /*!< 2.0.229: IRQ-servicing path active (no blocking) */
     bool                      fFirstIrqMarked;       /*!< 2.0.226: irq:first-entry NVRAM marker written (thread ctx) */
+    uint32_t                  fPendingMaster;        /*!< filter snapshot of GEN11_GFX_MSTR_IRQ (primary ctx) */
+    uint32_t                  fCsbReadPtr;           /*!< next Gen11 CSB entry to drain (0..11) */
+    uint32_t                  fLastHwspSeqno;        /*!< last HWSP seqno observed by IRQ/ALIVE poll */
+    bool                      fIrqFilterActive;      /*!< true when MSI filter source owns the vector */
 
     /*
      * ─────────────────────────────────────
@@ -1401,6 +1451,7 @@ private:
     MyIntelRing              *fRingRCS;           /*!< Render Command Streamer ring */
     MyIntelRing              *fRingBCS;           /*!< Blitter Command Streamer ring */
     MyIntelRing              *fRingVCS;           /*!< Video Command Streamer ring (VCS0) */
+    MyIntelRing              *fRingVCS2;          /*!< Second enumerated VDBOX ring (VCS2) */
 
     /* Ring Callbacks — struct for ringCreate/Submit */
     MyIntelRingCallbacks     *fRingCallbacks;     /*!< Dynamically allocated callbacks */
@@ -1410,6 +1461,7 @@ private:
     MyIntelGEMBuffer         *fGemRingRCS;        /*!< GEM buffer for RCS ring */
     MyIntelGEMBuffer         *fGemRingBCS;        /*!< GEM buffer for BCS ring */
     MyIntelGEMBuffer         *fGemRingVCS;        /*!< GEM buffer for VCS ring */
+    MyIntelGEMBuffer         *fGemRingVCS2;       /*!< GEM buffer for VCS2 ring */
 
     /* Phase 5 init state */
     bool                      fAccelInitialized;  /*!< true after initHardwareAcceleration() */
@@ -1457,6 +1509,8 @@ private:
     uint32_t                  fFWRefCount;         /*!< Force wake reference count */
     bool                      fFWPinned;           /*!< Accel-init sticky forcewake ref held */
     bool                      fRC6Enabled;         /*!< RC6 currently active */
+    bool                      fMediaFWHeld;        /*!< Media (VDBOX/VEBOX) forcewake asserted */
+    uint8_t                   fMediaFWMissCount;   /*!< Consecutive all-domain ACK misses (give up at 3) */
 
     /* Accessor for IntelFramebuffer (for interrupt wiring) */
     IntelFramebuffer *getFramebuffer(void) const { return fFramebuffer; }
@@ -1486,7 +1540,7 @@ private:
 
     /* Phase 7 state */
     bool                      fMediaInitialized;     /*!< true after startPhase7Media() */
-    uint32_t                  fVdboxDisableMask;     /*!< GEN11_GT_VEBOX_VDBOX_DISABLE raw */
+    uint32_t                  fVdboxDisableMask;     /*!< unsupported/disabled VDBOX slots */
     uint32_t                  fActiveVdboxCount;     /*!< number of available VDBOX */
     uint32_t                  fActiveVeboxCount;     /*!< number of available VEBOX */
     /* VDBOX instance tracking — max 4 (RPL-P) */
@@ -1499,13 +1553,13 @@ private:
         uint32_t auxInvReg;
         uint8_t  index;
         bool     hasSfc;
-        bool     initialized;
+        bool     enumerated;
     } fVdboxInstances[4];
     struct {
         uint32_t mmioBase;
         uint32_t auxInvReg;
         uint8_t  index;
-        bool     initialized;
+        bool     enumerated;
     } fVeboxInstances[2];
 };
 

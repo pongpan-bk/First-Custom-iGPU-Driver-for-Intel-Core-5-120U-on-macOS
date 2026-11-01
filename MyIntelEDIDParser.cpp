@@ -352,14 +352,14 @@ bool MyIntelEDIDParser::parseDetailedTiming(const UInt8 *desc, DetailedTiming *t
 
     timing->pixelClock = readLE16(desc) * 10; /* Convert to kHz */
 
-    timing->hActive = desc[2] | ((desc[4] & 0xF0) << 4);
-    timing->hBlank = desc[3] | ((desc[4] & 0x0F) << 8);
+    timing->hActive = (UInt16)(desc[2] | ((desc[4] & 0xF0) << 4));
+    timing->hBlank = (UInt16)(desc[3] | ((desc[4] & 0x0F) << 8));
 
-    timing->vActive = desc[5] | ((desc[7] & 0xF0) << 4);
-    timing->vBlank = desc[6] | ((desc[7] & 0x0F) << 8);
+    timing->vActive = (UInt16)(desc[5] | ((desc[7] & 0xF0) << 4));
+    timing->vBlank = (UInt16)(desc[6] | ((desc[7] & 0x0F) << 8));
 
-    timing->hSyncOffset = desc[8] | ((desc[10] & 0xF0) << 4);
-    timing->hSyncWidth = desc[9] | ((desc[10] & 0x0F) << 8);
+    timing->hSyncOffset = (UInt8)(desc[8] | ((desc[10] & 0xF0) << 4));
+    timing->hSyncWidth = (UInt8)(desc[9] | ((desc[10] & 0x0F) << 8));
 
     timing->vSyncOffset = (desc[11] & 0xF0) | ((desc[12] & 0xF0) >> 4);
     timing->vSyncWidth = (desc[11] & 0x0F) | (desc[12] & 0x0F);
@@ -385,7 +385,7 @@ bool MyIntelEDIDParser::validateChecksum(const UInt8 *block, UInt32 size) const
 
 UInt16 MyIntelEDIDParser::decodeManufacturer(const UInt8 *bytes) const
 {
-    return (bytes[0] << 8) | bytes[1];
+    return (UInt16)((bytes[0] << 8) | bytes[1]);
 }
 
 void MyIntelEDIDParser::decodeManufacturerString(UInt16 code, char *out) const
@@ -395,7 +395,7 @@ void MyIntelEDIDParser::decodeManufacturerString(UInt16 code, char *out) const
      * byte 1: bits 7-5 = char 1 bits 1-0, bits 4-0 = char 2
      */
     out[0] = 'A' + ((code >> 10) & 0x1F) - 1;
-    out[1] = 'A' + (((code >> 5) & 0x1F) | ((code & 0x07) << 2)) - 1; /* Fix: combine properly */
+    out[1] = (char)('A' + (((code >> 5) & 0x1F) | ((code & 0x07) << 2)) - 1); /* Fix: combine properly */
     out[2] = 'A' + (code & 0x1F) - 1;
     out[3] = '\0';
 
@@ -412,7 +412,7 @@ void MyIntelEDIDParser::decodeManufacturerString(UInt16 code, char *out) const
 
 UInt16 MyIntelEDIDParser::readLE16(const UInt8 *ptr) const
 {
-    return (UInt16)ptr[0] | ((UInt16)ptr[1] << 8);
+    return (UInt16)((UInt16)ptr[0] | ((UInt16)ptr[1] << 8));
 }
 
 UInt32 MyIntelEDIDParser::readLE32(const UInt8 *ptr) const
@@ -428,8 +428,8 @@ UInt32 MyIntelEDIDParser::modeInfoFromTiming(const DetailedTiming *t, IODisplayM
     bzero(info, sizeof(IODisplayModeInformation));
     info->nominalWidth = t->hActive;
     info->nominalHeight = t->vActive;
-    info->refreshRate = ((t->pixelClock * 1000ULL) << 16) /
-                        ((t->hActive + t->hBlank) * (t->vActive + t->vBlank));
+    info->refreshRate = (IOFixed1616)(((t->pixelClock * 1000ULL) << 16) /
+                        ((t->hActive + t->hBlank) * (t->vActive + t->vBlank)));
     info->maxDepthIndex = 0;
     info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag;
     if (t == &fDetailedTimings[0]) {

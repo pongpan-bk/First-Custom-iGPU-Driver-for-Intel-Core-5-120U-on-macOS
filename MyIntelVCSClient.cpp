@@ -174,6 +174,11 @@ static const IOExternalMethodDispatch sVCSMethodTable[] = {
     { MyIntelVCSClient::setHuCFirmware, 2, 0, 0, 0 },
     /* kSetGuCFirmware — set GuC firmware GGTT offset (loads GuC before HuC) */
     { MyIntelVCSClient::setGuCFirmware, 2, 0, 0, 0 },
+    { MyIntelVCSClient::submitVCS2Workload, 0, kIOUCVariableStructureSize, 0, 0 },
+    { MyIntelVCSClient::engineResetVCS2, 0, 0, 8, 0 },
+    { MyIntelVCSClient::engineDiagVCS2, 0, 0, 12, 0 },
+    { MyIntelVCSClient::getContextInfoVCS2, 0, 0, 3, 0 },
+    { MyIntelVCSClient::waitForCompletionVCS2, 1, 0, 1, 0 },
 };
 
 IOReturn MyIntelVCSClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
@@ -310,10 +315,9 @@ IOReturn MyIntelVCSClient::submitCommandBuffer(OSObject *target, void *reference
 }
 
 /*
- * kWaitForCompletion — poll VCS status register until done
+ * kWaitForCompletion — wait until the VCS LRC ring head reaches its tail
  *
  * args[0] = timeout in milliseconds
- * Returns: scalarOutput[0] = VCS status register value
  */
 IOReturn MyIntelVCSClient::waitForCompletion(OSObject *target, void *reference,
                                              IOExternalMethodArguments *args)
@@ -322,25 +326,48 @@ IOReturn MyIntelVCSClient::waitForCompletion(OSObject *target, void *reference,
     if (!self || !self->fProvider) {
         return kIOReturnNotReady;
     }
+    return self->waitForRingCompletion(args, self->fProvider->getVCSRing());
+}
 
-    uint32_t timeoutMs = (args->scalarInputCount > 0) ? (uint32_t)args->scalarInput[0] : 5000;
+IOReturn MyIntelVCSClient::waitForCompletionVCS2(OSObject *target, void *reference,
+                                                 IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider) {
+        return kIOReturnNotReady;
+    }
+    return self->waitForRingCompletion(args, self->fProvider->getVCS2Ring());
+}
 
-    uint32_t status = 0;
-    uint32_t elapsed = 0;
-
-    while (elapsed < timeoutMs) {
-        status = self->fProvider->readReg32(VCS0_BASE_REAL + 0x34);
-        if (status == 0) {
-            break;
-        }
-        IODelay(1000);
-        elapsed++;
+IOReturn MyIntelVCSClient::waitForRingCompletion(IOExternalMethodArguments *args,
+                                                 MyIntelRing *ring)
+{
+    if (!args || !ring || !ringIsInitialized(ring)) {
+        return kIOReturnNotReady;
+    }
+    if (!ring->lrcInited || !ring->lrcVaddr) {
+        return kIOReturnNotReady;
     }
 
-    args->scalarOutput[0] = status;
-    args->scalarOutputCount = 1;
+    volatile uint32_t *lrcState =
+        (volatile uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
+    uint32_t tail = ring->tail & (ring->size - 1);
+    uint32_t timeoutMs = (args->scalarInputCount > 0) ? (uint32_t)args->scalarInput[0] : 5000;
+    uint32_t elapsed = 0;
+    uint32_t head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
 
-    return (elapsed < timeoutMs) ? kIOReturnSuccess : kIOReturnTimeout;
+    while (head != tail && elapsed < timeoutMs) {
+        IODelay(1000);
+        elapsed++;
+        head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
+    }
+
+    if (args->scalarOutputCount > 0) {
+        args->scalarOutput[0] = head;
+        args->scalarOutputCount = 1;
+    }
+
+    return (head == tail) ? kIOReturnSuccess : kIOReturnTimeout;
 }
 
 /*
@@ -459,6 +486,26 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
     if (!self || !self->fProvider) {
         return kIOReturnNotReady;
     }
+    return self->submitVCSWorkloadToRing(args, self->fProvider->getVCSRing());
+}
+
+IOReturn MyIntelVCSClient::submitVCS2Workload(OSObject *target, void *reference,
+                                              IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider) {
+        return kIOReturnNotReady;
+    }
+    return self->submitVCSWorkloadToRing(args, self->fProvider->getVCS2Ring());
+}
+
+IOReturn MyIntelVCSClient::submitVCSWorkloadToRing(IOExternalMethodArguments *args,
+                                                   MyIntelRing *ring)
+{
+    MyIntelVCSClient *self = this;
+    if (!self->fProvider || !args) {
+        return kIOReturnNotReady;
+    }
 
     const uint32_t *userCmds = (const uint32_t *)args->structureInput;
     size_t cmdSizeByte = args->structureInputSize;
@@ -471,21 +518,23 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
 
     uint32_t dwordCount = (uint32_t)(cmdSizeByte / 4);
 
-    MyIntelRing *ring = self->fProvider->getVCSRing();
     if (!ring || !ringIsInitialized(ring)) {
-        IODebug("submitVCSWorkload: VCS ring not initialized");
+        IODebug("submitVCSWorkload: target VCS ring not initialized");
         return kIOReturnNotReady;
     }
+    const char *engineName = (ring->mmioBase == VCS2_BASE_REAL) ? "VCS2" : "VCS0";
 
     if (dwordCount > ringSpace(ring) / 4) {
-        IODebug("submitVCSWorkload: REJECTED — %u dwords exceeds ring space %u bytes",
+        IODebug("submitVCSWorkload(%s): REJECTED — %u dwords exceeds ring space %u bytes",
+                engineName,
                 dwordCount, ringSpace(ring));
         return kIOReturnNoMemory;
     }
 
     /* Forcewake: wake GT + RENDER domains so VCS ring regs are not gated */
     if (!self->fProvider->forceWakeGet()) {
-        IODebug("submitVCSWorkload: forcewake FAILED — engine asleep, aborting");
+        IODebug("submitVCSWorkload(%s): forcewake FAILED — engine asleep, aborting",
+                engineName);
         return kIOReturnTimeout;
     }
 
@@ -498,10 +547,12 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
                                                 self->fProvider->gucGgttOffset,
                                                 self->fProvider->gucSize);
             self->fProvider->fGuCLoaded = gucLoaded;
-            IODebug("submitVCSWorkload: lazy GuC firmware load %s",
+            IODebug("submitVCSWorkload(%s): lazy GuC firmware load %s",
+                    engineName,
                     gucLoaded ? "SUCCESS" : "FAILED");
         } else {
-            IODebug("submitVCSWorkload: GuC firmware not set (gucGgttOffset=0), skipping load");
+            IODebug("submitVCSWorkload(%s): GuC firmware not set (gucGgttOffset=0), skipping load",
+                    engineName);
         }
     }
 
@@ -512,10 +563,12 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
             bool hucLoaded = vcsLoadHuCFirmware(self->fProvider, NULL,
                                                 NULL, self->fProvider->getFwSize());
             self->fProvider->fHuCLoaded = hucLoaded;
-            IODebug("submitVCSWorkload: lazy HuC firmware load %s",
+            IODebug("submitVCSWorkload(%s): lazy HuC firmware load %s",
+                    engineName,
                     hucLoaded ? "SUCCESS" : "FAILED");
         } else {
-            IODebug("submitVCSWorkload: HuC firmware not set (fwGgttOffset=0), skipping load");
+            IODebug("submitVCSWorkload(%s): HuC firmware not set (fwGgttOffset=0), skipping load",
+                    engineName);
         }
     }
 
@@ -531,7 +584,7 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
      * nothing. Identity map = VA == GGTT offset, so the user-space
      * command stream needs no changes. */
     {
-        MyIntelRing *vcsRing = self->fProvider->getVCSRing();
+        MyIntelRing *vcsRing = ring;
         if (vcsRing && vcsRing->ppgttPTs) {
             uint32_t mapped = 0;
             for (int i = 0; i < VCS_GEM_MAX_HANDLES; i++) {
@@ -542,71 +595,22 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
                                      b->pagesPhys, b->pages)) {
                     mapped++;
                 } else {
-                    IODebug("submitVCSWorkload: PPGTT map FAILED — handle=%d ggtt=0x%X pages=%u",
+                    IODebug("submitVCSWorkload(%s): PPGTT map FAILED — handle=%d ggtt=0x%X pages=%u",
+                            engineName,
                             i, b->ggttOffset, b->pages);
                 }
             }
-            IODebug("submitVCSWorkload: PPGTT identity map — %u/%d GEM buffers",
+            IODebug("submitVCSWorkload(%s): PPGTT identity map — %u/%d GEM buffers",
+                    engineName,
                     mapped, VCS_GEM_MAX_HANDLES);
-        }
-    }
-
-    /* ── PPGTT identity map: map EVERY client GEM buffer into the VCS
-     * ring's 4-level PPGTT before kicking.
-     *
-     * Root cause of Phase-10 READBACK=0 (proved with MI_STORE_DATA_IMM
-     * probe): the execlists LRC descriptor uses DESC_LEGACY_64B, so all
-     * command data addresses resolve through the context's PPGTT — NOT
-     * the GGTT. lrcMapBatchPages() had only ever been called for RCS/BCS
-     * batches, so selector-6 workloads ran with every surface/IndObj
-     * address unmapped → all VDBOX DMA silently faulted and wrote
-     * nothing. Identity map = VA == GGTT offset, so the user-space
-     * command stream needs no changes. */
-    {
-        MyIntelRing *vcsRing = self->fProvider->getVCSRing();
-        if (vcsRing && vcsRing->ppgttPTs) {
-            uint32_t mapped = 0;
-            for (int i = 0; i < VCS_GEM_MAX_HANDLES; i++) {
-                if (!self->fGemSlots[i].active || !self->fGemSlots[i].buf) continue;
-                MyIntelGEMBuffer *b = self->fGemSlots[i].buf;
-                if (!b->pagesPhys || b->pages == 0) continue;
-                if (lrcMapBatchPages(vcsRing, b->ggttOffset,
-                                      b->pagesPhys, b->pages)) {
-                    mapped++;
-                } else {
-                    IODebug("submitVCSWorkload: PPGTT map FAILED — handle=%d ggtt=0x%X pages=%u",
-                            i, b->ggttOffset, b->pages);
-                }
-            }
-            IODebug("submitVCSWorkload: PPGTT identity map — %u/%d GEM buffers",
-                    mapped, VCS_GEM_MAX_HANDLES);
-        }
-    }
-
-    /* VDBOX ENGINE RESET (Surgical Fix for 0x1001 / kIOReturnNotPrivileged)
-     * To ensure the engine is in a clean, idle state before submission,
-     * we perform a domain reset. This clears any stale pending work and
-     * resets the hardware HEAD/TAIL. */
-    {
-        uint64_t resetOut[8];
-        uint32_t resetCnt = 8;
-        
-        // We are inside the kernel, so we call the engineReset logic directly 
-        // instead of using IOConnectCallMethod (which is for user-space).
-        IOReturn resetKr = self->engineReset(NULL, NULL, NULL); 
-        
-        if (resetKr != kIOReturnSuccess) {
-            IODebug("submitVCSWorkload: engineReset FAILED (kr=0x%X)", resetKr);
-            // Non-fatal, but may cause NotPrivileged if hardware was wedged
-        } else {
-            IODebug("submitVCSWorkload: engineReset OK");
         }
     }
 
     /* Copy user command dwords into VCS ring buffer */
     uint32_t *cs = ringBegin(ring, dwordCount);
     if (!cs) {
-        IODebug("submitVCSWorkload: ringBegin returned NULL (ring full?)");
+        IODebug("submitVCSWorkload(%s): ringBegin returned NULL (ring full?)",
+                engineName);
         self->fProvider->forceWakePut();
         return kIOReturnNoMemory;
     }
@@ -617,14 +621,112 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
 
     self->fProvider->forceWakePut();
 
-    IODebug("submitVCSWorkload: OK — %u dwords (%zu bytes) pushed to VCS ring",
+    IODebug("submitVCSWorkload(%s): queued %u dwords (%zu bytes)",
+            engineName,
             dwordCount, cmdSizeByte);
     return kIOReturnSuccess;
 }
 
 /*
  * ─────────────────────────────────────────────
- *  2.0.251 — engineReset: VDBOX engine-level reset
+ *  doEngineResetCore — internal reset helper (no args dependency)
+ * ─────────────────────────────────────────────
+ *  Contains the actual GDRST + ring rewind logic for the explicit
+ *  external-method recovery path. Caller must NOT hold forceWake; this function
+ *  acquires and releases it.  Returns kIOReturnSuccess on clean self-clear,
+ *  kIOReturnTimeout if GDRST does not clear within 10 ms, or
+ *  kIOReturnNotReady if the ring is missing/stopping.
+ */
+IOReturn MyIntelVCSClient::doEngineResetCore(MyIntelRing *ring, uint32_t resetDomain)
+{
+    if (!fProvider || fProvider->isStopping()) {
+        return kIOReturnNotReady;
+    }
+    if (!ring || resetDomain == 0) {
+        return kIOReturnNotReady;
+    }
+
+    if (!fProvider->forceWakeGet()) {
+        IODebug("doEngineResetCore: forcewake FAILED");
+        return kIOReturnTimeout;
+    }
+
+    uint32_t base  = ring->mmioBase;
+    uint32_t esr   = fProvider->readReg32(base + RING_ESR_OFFSET);
+    uint32_t ipehr = fProvider->readReg32(base + RING_IPEHR_OFFSET);
+    uint32_t head  = fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+    uint32_t tail  = fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
+    uint32_t ctl   = fProvider->readReg32(base + RING_CTL_REG_OFFSET);
+
+    IODebug("engineReset: pre-reset ESR=0x%08X IPEHR=0x%08X HEAD=0x%X TAIL=0x%X CTL=0x%X",
+            esr, ipehr, head, tail, ctl);
+
+    /* Reset only the selected engine's Gen11+ GDRST domain. */
+    bool ok = false;
+    fProvider->writeReg32(GEN6_GDRST_REG_OFFSET, resetDomain);
+    for (int i = 0; i < 1000; i++) {
+        if ((fProvider->readReg32(GEN6_GDRST_REG_OFFSET) & resetDomain) == 0) {
+            ok = true;
+            break;
+        }
+        IODelay(10);
+    }
+
+    /* 2.0.252: GDRST returns the engine to power-on defaults — execlists
+     * mode is OFF again and subsequent EL_CTRL_LOAD kicks are silently
+     * ignored (i915 re-runs enable_execlists() after every engine reset).
+     * Reprogram: DISABLE_LEGACY_MODE, clear STOP_RING, floor CSB ptr. */
+    if (ok) {
+        /* Only reset software queue state after hardware confirms the reset. */
+        if (ring == fProvider->getVCSRing()) {
+            ring->head = ring->tail;
+            fProvider->vcsFlushPendingQueue();
+        } else {
+            ringResetSoftware(ring);
+        }
+
+        fProvider->writeReg32(base + RING_HEAD_REG_OFFSET, 0);
+        fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+        fProvider->writeReg32(base + RING_TAIL_REG_OFFSET, 0);
+        fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
+
+        fProvider->writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
+        fProvider->readReg32(base + RING_MODE_GEN7_OFFSET);
+        fProvider->writeReg32(base + RING_MI_MODE_REG_OFFSET, 0x00010000u);
+        fProvider->readReg32(base + RING_MI_MODE_REG_OFFSET);
+        fProvider->writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET,
+                               CONTEXT_STATUS_PTR_RESET);
+        fProvider->readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
+    }
+
+    /* Per-engine HWS state is lost in the domain reset — reprogram it
+     * exactly like ringCreate does (HWS PGA ptr + CSB write ptr + STAM). */
+    if (ok && ring->hwspGgtt) {
+        fProvider->writeReg32(base + RING_HWS_PGA_OFFSET, ring->hwspGgtt);
+        fProvider->readReg32(base + RING_HWS_PGA_OFFSET);
+        fProvider->writeReg32(base + RING_HWS_STAM_OFFSET, ~0U);
+        fProvider->readReg32(base + RING_HWS_STAM_OFFSET);
+        if (ring->hwspVaddr) {
+            ring->hwspVaddr[HWS_CSB_WRITE_DWORD] = HWS_CSB_ENTRIES_GEN11 - 1;
+            memset((uint8_t *)ring->hwspVaddr + HWS_CSB_BUF0_DWORD * 4, 0xFF,
+                   HWS_CSB_ENTRIES_GEN11 * sizeof(uint64_t));
+        }
+    }
+
+    uint32_t esr2    = fProvider->readReg32(base + RING_ESR_OFFSET);
+    uint32_t head2   = fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+    uint32_t scratch = ring->hwspVaddr ? ring->hwspVaddr[0x800 / 4] : 0;
+
+    IODebug("engineReset: %s — post-reset ESR=0x%08X HEAD=0x%X hwspScratch[0x800]=0x%08X",
+            ok ? "OK" : "TIMEOUT", esr2, head2, scratch);
+
+    fProvider->forceWakePut();
+    return ok ? kIOReturnSuccess : kIOReturnTimeout;
+}
+
+/*
+ * ─────────────────────────────────────────────
+ *  2.0.251 — engineReset: VDBOX engine-level reset (external method)
  * ─────────────────────────────────────────────
  *  An illegal instruction on VDBOX raises ESR bit0 and PERMANENTLY halts
  *  the engine (HEAD frozen, nothing executes until reset). Before 2.0.251
@@ -633,9 +735,8 @@ IOReturn MyIntelVCSClient::submitVCSWorkload(OSObject *target, void *reference,
  *  into GEN6_GDRST (0x941C) and wait for self-clear. VCS0 domain =
  *  GEN6_GRDOM_MEDIA = bit2 (intel_engine_cs.c [VCS0]=GEN11_GRDOM_MEDIA).
  *
- *  Also rewinds the ring bookkeeping (head=tail) so the next execlist
- *  restore skips over the stale pre-reset stream, and returns the PPHWSP
- *  scratch dword (LRC+0x800) for MI_FLUSH_DW STORE_INDEX probes.
+ *  Delegates actual reset work to doEngineResetCore() so this path can
+ *  also be called internally without a valid IOExternalMethodArguments.
  */
 IOReturn MyIntelVCSClient::engineReset(OSObject *target, void *reference,
                                        IOExternalMethodArguments *args)
@@ -644,105 +745,28 @@ IOReturn MyIntelVCSClient::engineReset(OSObject *target, void *reference,
     if (!self || !self->fProvider || !args) {
         return kIOReturnBadArgument;
     }
-    if (self->fProvider->isStopping()) {
-        return kIOReturnNotReady;
-    }
 
+    /* Snapshot pre-reset state for diagnostic output scalars */
     MyIntelRing *ring = self->fProvider->getVCSRing();
-    if (!ring) {
-        return kIOReturnNotReady;
+    uint32_t esr = 0, ipehr = 0, head = 0, tail = 0, ctl = 0;
+    if (ring && !self->fProvider->isStopping() && self->fProvider->forceWakeGet()) {
+        uint32_t base = ring->mmioBase;
+        esr   = self->fProvider->readReg32(base + RING_ESR_OFFSET);
+        ipehr = self->fProvider->readReg32(base + RING_IPEHR_OFFSET);
+        head  = self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+        tail  = self->fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
+        ctl   = self->fProvider->readReg32(base + RING_CTL_REG_OFFSET);
+        self->fProvider->forceWakePut();
     }
 
-    if (!self->fProvider->forceWakeGet()) {
-        IODebug("engineReset: forcewake FAILED");
-        return kIOReturnTimeout;
-    }
-
-    uint32_t base  = ring->mmioBase;
-    uint32_t esr   = self->fProvider->readReg32(base + RING_ESR_OFFSET);
-    uint32_t ipehr = self->fProvider->readReg32(base + RING_IPEHR_OFFSET);
-    uint32_t head  = self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
-    uint32_t tail  = self->fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
-    uint32_t ctl   = self->fProvider->readReg32(base + RING_CTL_REG_OFFSET);
-
-    IODebug("engineReset: pre-reset ESR=0x%08X IPEHR=0x%08X HEAD=0x%X TAIL=0x%X CTL=0x%X",
-            esr, ipehr, head, tail, ctl);
-
-    /* GEN6_GDRST with Gen11+ VCS0 domain (MEDIA bit5 | SFC0 bit17) */
-    bool ok = false;
-    self->fProvider->writeReg32(GEN6_GDRST_REG_OFFSET, VCS0_GDRST_DOMAIN);
-    for (int i = 0; i < 1000; i++) {
-        if ((self->fProvider->readReg32(GEN6_GDRST_REG_OFFSET) & VCS0_GDRST_DOMAIN) == 0) {
-            ok = true;
-            break;
-        }
-        IODelay(10);
-    }
-
-    /* Rewind ring: next lrcUpdateRingRegs() restores HEAD=TAIL (idle),
-     * so the stale pre-reset command stream is never re-executed. */
-    ring->head = ring->tail;
-
-    /* 2.0.255: batches queued while wedged can never complete — without
-     * this flush the pending queue stays FULL and every submit returns
-     * kIOReturnBusy forever after the reset. */
-    self->fProvider->vcsFlushPendingQueue();
-
-    /* 2.0.252: GDRST returns the engine to power-on defaults — execlists
-     * mode is OFF again and subsequent EL_CTRL_LOAD kicks are silently
-     * ignored (i915 re-runs enable_execlists() after every engine reset).
-     * Reprogram: DISABLE_LEGACY_MODE, clear STOP_RING, floor CSB ptr. */
-    if (ok) {
-        /* Reset ring HEAD/TAIL to 0 — clear stale ring position from
-         * previous (possibly faulted) execution. Without this the
-         * hardware HEAD remains at the fault address and the next
-         * execlist submission re-fetches stale commands. */
-        self->fProvider->writeReg32(base + RING_HEAD_REG_OFFSET, 0);
-        self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);   /* posting */
-        self->fProvider->writeReg32(base + RING_TAIL_REG_OFFSET, 0);
-        self->fProvider->readReg32(base + RING_TAIL_REG_OFFSET);   /* posting */
-
-        self->fProvider->writeReg32(base + RING_MODE_GEN7_OFFSET, 0x00080008u);
-        self->fProvider->readReg32(base + RING_MODE_GEN7_OFFSET);
-        self->fProvider->writeReg32(base + RING_MI_MODE_REG_OFFSET, 0x00010000u);
-        self->fProvider->readReg32(base + RING_MI_MODE_REG_OFFSET);
-        self->fProvider->writeReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET,
-                                    CONTEXT_STATUS_PTR_RESET);
-        self->fProvider->readReg32(base + RING_CONTEXT_STATUS_PTR_OFFSET);
-    }
-
-    /* Per-engine HWS state is lost in the domain reset — reprogram it
-     * exactly like ringCreate does (HWS PGA ptr + CSB write ptr + STAM). */
-    if (ok && ring->hwspGgtt) {
-        self->fProvider->writeReg32(base + RING_HWS_PGA_OFFSET, ring->hwspGgtt);
-        self->fProvider->readReg32(base + RING_HWS_PGA_OFFSET);   /* posting */
-        self->fProvider->writeReg32(base + RING_HWS_STAM_OFFSET, ~0U);
-        self->fProvider->readReg32(base + RING_HWS_STAM_OFFSET);  /* posting */
-        if (ring->hwspVaddr) {
-            ring->hwspVaddr[HWS_CSB_WRITE_DWORD] = HWS_CSB_ENTRIES_GEN11 - 1;
-            memset((uint8_t *)ring->hwspVaddr + HWS_CSB_BUF0_DWORD * 4, 0xFF,
-                   HWS_CSB_ENTRIES_GEN11 * sizeof(uint64_t));
-        }
-    }
-
-    uint32_t esr2   = self->fProvider->readReg32(base + RING_ESR_OFFSET);
-    uint32_t head2  = self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
-    /* 2.0.252: MI_FLUSH_DW|STORE_INDEX writes into the RING_HWS_PGA page
-     * (i915 status page), NOT the LRC PPHWSP — read the HWSP scratch. */
-    uint32_t scratch = ring->hwspVaddr ? ring->hwspVaddr[0x800 / 4] : 0;
-    uint32_t lrcScratch = ring->lrcVaddr
-        ? ((uint32_t *)ring->lrcVaddr)[0x800 / 4]
-        : 0;
-    uint32_t lrcHead = (ring->lrcInited && ring->lrcVaddr)
-        ? ((uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET))[CTX_RING_HEAD]
-        : 0;
-
-    IODebug("engineReset: %s — post-reset ESR=0x%08X HEAD=0x%X hwspScratch[0x800]=0x%08X",
-            ok ? "OK" : "TIMEOUT", esr2, head2, scratch);
-
-    self->fProvider->forceWakePut();
+    IOReturn kr = self->doEngineResetCore(ring, VCS0_GDRST_DOMAIN);
 
     if (args->scalarOutputCount >= 8) {
+        uint32_t scratch    = (ring && ring->hwspVaddr) ? ring->hwspVaddr[0x800 / 4] : 0;
+        uint32_t lrcScratch = (ring && ring->lrcVaddr)
+            ? ((uint32_t *)ring->lrcVaddr)[0x800 / 4] : 0;
+        uint32_t lrcHead    = (ring && ring->lrcInited && ring->lrcVaddr)
+            ? ((uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET))[CTX_RING_HEAD] : 0;
         args->scalarOutput[0] = esr;
         args->scalarOutput[1] = ipehr;
         args->scalarOutput[2] = head;
@@ -752,7 +776,7 @@ IOReturn MyIntelVCSClient::engineReset(OSObject *target, void *reference,
         args->scalarOutput[6] = lrcScratch;   /* LRC PPHWSP +0x800 (alt. interpretation) */
         args->scalarOutput[7] = lrcHead;      /* LRC image CTX_RING_HEAD (HW write-back) */
     }
-    return ok ? kIOReturnSuccess : kIOReturnTimeout;
+    return kr;
 }
 
 /*
@@ -808,6 +832,103 @@ IOReturn MyIntelVCSClient::engineDiag(OSObject *target, void *reference,
         args->scalarOutput[i] = out[i];
     }
     return kIOReturnSuccess;
+}
+
+IOReturn MyIntelVCSClient::engineResetVCS2(OSObject *target, void *reference,
+                                           IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider || !args) {
+        return kIOReturnBadArgument;
+    }
+
+    MyIntelRing *ring = self->fProvider->getVCS2Ring();
+    if (!ring || self->fProvider->isStopping()) {
+        return kIOReturnNotReady;
+    }
+
+    uint32_t base = ring->mmioBase;
+    if (!self->fProvider->forceWakeGet()) {
+        return kIOReturnTimeout;
+    }
+    uint32_t esr = self->fProvider->readReg32(base + RING_ESR_OFFSET);
+    uint32_t ipehr = self->fProvider->readReg32(base + RING_IPEHR_OFFSET);
+    uint32_t head = self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+    uint32_t tail = self->fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
+    uint32_t ctl = self->fProvider->readReg32(base + RING_CTL_REG_OFFSET);
+    self->fProvider->forceWakePut();
+
+    IOReturn kr = self->doEngineResetCore(ring, VCS2_GDRST_DOMAIN);
+
+    if (args->scalarOutputCount >= 8) {
+        args->scalarOutput[0] = esr;
+        args->scalarOutput[1] = ipehr;
+        args->scalarOutput[2] = head;
+        args->scalarOutput[3] = tail;
+        args->scalarOutput[4] = ctl;
+        args->scalarOutput[5] = ring->hwspVaddr ? ring->hwspVaddr[0x800 / 4] : 0;
+        args->scalarOutput[6] = ring->lrcVaddr
+            ? ((uint32_t *)ring->lrcVaddr)[0x800 / 4] : 0;
+        args->scalarOutput[7] = (ring->lrcInited && ring->lrcVaddr)
+            ? ((uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET))[CTX_RING_HEAD]
+            : 0;
+    }
+    return kr;
+}
+
+IOReturn MyIntelVCSClient::engineDiagVCS2(OSObject *target, void *reference,
+                                          IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider || !args) {
+        return kIOReturnNotReady;
+    }
+    MyIntelRing *ring = self->fProvider->getVCS2Ring();
+    if (!ring) {
+        return kIOReturnNotReady;
+    }
+    if (!self->fProvider->forceWakeGet()) {
+        return kIOReturnTimeout;
+    }
+
+    uint32_t base = ring->mmioBase;
+    uint32_t out[12];
+    out[0] = self->fProvider->readReg32(base + RING_ESR_OFFSET);
+    out[1] = self->fProvider->readReg32(base + RING_IPEHR_OFFSET);
+    uint32_t *state = (ring->lrcInited && ring->lrcVaddr)
+        ? (uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET) : NULL;
+    out[2] = state ? state[CTX_RING_HEAD] : 0;
+    out[3] = state ? state[CTX_RING_TAIL] : 0;
+    out[4] = ring->hwspVaddr ? ring->hwspVaddr[HWS_CSB_WRITE_DWORD] : 0;
+    out[5] = ring->hwspVaddr ? ring->hwspVaddr[HWS_CSB_BUF0_DWORD] : 0;
+    out[6] = ring->hwspVaddr ? ring->hwspVaddr[0x800 / 4] : 0;
+    out[7] = self->fProvider->readReg32(base + RING_EXECLIST_STATUS_LO_OFFSET);
+    out[8] = self->fProvider->readReg32(base + 0x94);
+    out[9] = self->fProvider->readReg32(base + RING_HEAD_REG_OFFSET);
+    out[10] = self->fProvider->readReg32(base + RING_TAIL_REG_OFFSET);
+    out[11] = self->fProvider->readReg32(base + RING_CTL_REG_OFFSET);
+    self->fProvider->forceWakePut();
+
+    uint32_t count = args->scalarOutputCount < 12 ? args->scalarOutputCount : 12;
+    for (uint32_t i = 0; i < count; i++) {
+        args->scalarOutput[i] = out[i];
+    }
+    return kIOReturnSuccess;
+}
+
+IOReturn MyIntelVCSClient::getContextInfoVCS2(OSObject *target, void *reference,
+                                             IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider || !args) {
+        return kIOReturnNotReady;
+    }
+    MyIntelRing *ring = self->fProvider->getVCS2Ring();
+    args->scalarOutput[0] = VCS2_BASE_REAL;
+    args->scalarOutput[1] = ring ? ring->ggttOffset : 0;
+    args->scalarOutput[2] = ring ? ring->size : 0;
+    args->scalarOutputCount = 3;
+    return ring ? kIOReturnSuccess : kIOReturnNotReady;
 }
 
 /*
@@ -1353,8 +1474,6 @@ IOReturn MyIntelVCSClient::getDecoderConfig(OSObject *target, void *reference,
     if (args->scalarOutputCount < 10) {
         return kIOReturnBadArgument;
     }
-
-    MyIntelGPU *provider = self->fProvider;
 
     // Return decoder capabilities for H.264, HEVC, VP9, AV1
     // Based on Gen12 (RPL) VDBOX capabilities

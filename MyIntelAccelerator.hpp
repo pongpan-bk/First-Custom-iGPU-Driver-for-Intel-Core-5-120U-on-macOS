@@ -2,11 +2,9 @@
  *  MyIntelAccelerator.hpp
  *  MyIntelGPU.kext — IOAccelerator binding (Phase 6c)
  *
- * Publishes an IOAccelerator service under the GPU so macOS userspace
- * (system_profiler / ioreg / Metal probing) sees this device as an
- * accelerator. Deliberately minimal and fail-safe: no family ABI
- * (IOAccelDevice2) — that requires closed IOGraphicsAccelerator2
- * provider virtuals and would panic against a plain IOAccelerator.
+ * Opt-in diagnostic IOAccelerator service. It exposes only the private
+ * diagnostic user client; it does not advertise Metal, GVA, or display-pipe
+ * support because those macOS client protocols are not implemented.
  *
  * Gated by boot-arg "myintelaccel" (see MyIntelGPU.cpp Phase 6c):
  *   absent   -> nothing created (byte-identical GPU-only behavior)
@@ -34,6 +32,7 @@ class MyIntelGPU;
 /* Private user-client connect type (above kIOAccelNumClientTypes space).
  * Diagnostic-only client: returns a fixed-size info struct. */
 #define kMyIntelAccelInfoClientType   0x100
+#define kMyIntelAccelMetalClientType  5
 
 /* Diagnostic info returned by selector 0 of MyIntelAccelClient */
 struct MyIntelAccelInfo {
@@ -84,12 +83,13 @@ public:
         uint64_t bytes;
     };
     SurfaceEntry *surfaceFindOrCreate(uint32_t sid);
+    void surfaceReleaseByID(uint32_t sid);
     void surfaceReleaseAll(void);
     void blitSurfaceToFramebuffer(mach_vm_address_t src_user_addr,
                                   uint32_t width, uint32_t height, uint32_t stride);
 
 private:
-    /*! @brief Publish the ICL-style property vocabulary (see .cpp). */
+    /*! @brief Publish diagnostic identity (see .cpp). */
     bool publishProperties(void);
 
     MyIntelGPU *fGPU;          /* not retained — parent holds us */
@@ -103,9 +103,9 @@ private:
     IOLock      *fSurfaceLock; /* guards table ops across WS threads */
 };
 
-/*! @brief Read-only diagnostic user client for the accelerator node.
- *  One selector (kMyIntelAccelSelectorGetInfo), fixed-size output,
- *  no pointer arguments from userspace — no arbitrary derefs. */
+/*! @brief User client for diagnostic and Metal factory contracts.
+ *  The diagnostic type exposes one fixed-size info selector. The Metal type
+ *  handles only the IOAccelDeviceCreateWithAPIProperty selectors. */
 class MyIntelAccelClient : public IOUserClient {
     OSDeclareDefaultStructors(MyIntelAccelClient)
 
@@ -126,9 +126,11 @@ public:
                              uint64_t *output, uint32_t outputCount);
 
 private:
+    IOReturn setupDirtyRing(IOExternalMethodArguments *arguments);
+
     MyIntelAccelerator *fAccel;  /* provider, not retained */
 
-    uint32_t fClientType;  /* user-client type from initWithTask (5 = Metal IOAccel device/shared contract) */
+    uint32_t fClientType;  /* user-client type from initWithTask */
     uint32_t fSurfaceID;  /* last SetIDMode target */
     uint32_t fColorMode;
     uint32_t fShapeW;

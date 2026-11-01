@@ -77,11 +77,17 @@ MyIntelRing *ringCreate(
     MyIntelEngineType    engineType,
     uint32_t             mmioBase,
     uint32_t             ringSize,
-    MyIntelRingCallbacks *cb)
+    MyIntelRingCallbacks *cb,
+    uint8_t              engineInstance)
 {
     if (!cb || !cb->gemAlloc || !cb->gemFree || !cb->gemGetOffset ||
         !cb->gemGetVAddr || !cb->readReg32 || !cb->writeReg32) {
         RING_DEBUG_RAW("ERROR: ringCreate — invalid callbacks");
+        return NULL;
+    }
+    if (engineInstance >= (1U << 6)) {
+        RING_DEBUG_RAW("ERROR: ringCreate — engine instance %u exceeds descriptor field",
+                       engineInstance);
         return NULL;
     }
 
@@ -106,6 +112,7 @@ MyIntelRing *ringCreate(
 
     ring->magic       = RING_MAGIC;
     ring->engineType  = engineType;
+    ring->engineInstance = engineInstance;
     ring->mmioBase    = mmioBase;
     ring->size        = ringSize;
     ring->head        = 0;
@@ -420,7 +427,7 @@ MyIntelRing *ringCreate(
             if (lrcPhys &&
                 lrcMapBatchPages(ring, ring->lrcGgtt, lrcPhys,
                                  LRC_CONTEXT_SIZE / GEM_PAGE_SIZE)) {
-                RING_DEBUG_RAW("ringCreate: LRC %u pages mapped into PPGTT",
+                RING_DEBUG_RAW("ringCreate: LRC %llu pages mapped into PPGTT",
                                LRC_CONTEXT_SIZE / GEM_PAGE_SIZE);
             } else {
                 RING_DEBUG_RAW("ringCreate: WARNING — LRC PPGTT map failed "
@@ -1234,7 +1241,8 @@ void ringSubmitExeclists(MyIntelRing *ring, MyIntelRingCallbacks *cb)
         if (PE_parse_boot_argn("mybcstest", &clsProbe, sizeof(clsProbe)) && clsProbe && clsProbe <= 5)
             hwClass = clsProbe;
     }
-    uint32_t descHi = (hwClass << (61 - 32))   /* class, instance = 0 */
+    uint32_t descHi = (hwClass << (61 - 32))
+                    | ((uint32_t)ring->engineInstance << (48 - 32))
                     | (1u << (37 - 32));        /* sw ctx id = 1 */
 
     bool fwHeld = (cb->fwGet != NULL) && cb->fwGet(cb->context);
@@ -1397,9 +1405,14 @@ void ringSubmit(MyIntelRing *ring, MyIntelRingCallbacks *cb)
      * Posting read — ensure the MMIO write reaches the GPU
      * before we proceed (prevents reordering)
      */
-    cb->readReg32(cb->context, ring->mmioBase + RING_TAIL_REG_OFFSET);
+    uint32_t tailReadback = cb->readReg32(cb->context, ring->mmioBase + RING_TAIL_REG_OFFSET);
 
     if (fwHeld) cb->fwPut(cb->context);
+
+    if ((tailReadback & ~0x7U) != tailValue) {
+        RING_DEBUG("ringSubmit: TAIL not landing base=0x%05X wrote=%u read=0x%08X",
+                   ring->mmioBase, tailValue, tailReadback);
+    }
 
     ring->lastTail = tailValue;
 
@@ -1486,12 +1499,16 @@ bool ringEmitSurfacePresent(MyIntelRing *bcs,
     return true;
 }
 
-bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va)
+bool ringEmitBatchStartSeqno(MyIntelRing *ring, uint32_t va, uint32_t seqno)
 {
     /* i915 gen8_emit_bb_start parity — 4 dwords, qword aligned:
      *   MI_ARB_ON_OFF|MI_ARB_ENABLE + BB_START_GEN8|non-secure + lo + hi
      * Non-secure bit (1<<8): without it the parser rejects the jump. */
-    uint32_t *cs = ringBegin(ring, 4);
+    bool storeSeqno = (seqno != 0 && ring->hwspGgtt != 0);
+    uint32_t seqnoAddr = storeSeqno ? HWS_SEQNO_ADDRESS(ring->hwspGgtt) : 0;
+    uint32_t dwords = storeSeqno ? 8 : 4;
+
+    uint32_t *cs = ringBegin(ring, dwords);
     if (!cs) return false;
 
     *cs++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
@@ -1499,9 +1516,22 @@ bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va)
     *cs++ = va;                     /* lower 32 bits (identity → GGTT offset) */
     *cs++ = 0;                      /* upper 32 bits (32-bit PPGTT) */
 
+    if (storeSeqno) {
+        *cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_SRM_LRM_GLOBAL_GTT;
+        *cs++ = seqnoAddr;
+        *cs++ = 0;
+        *cs++ = seqno;
+    }
+
     ringAdvance(ring, cs);
-    RING_DEBUG_RAW("ringEmitBatchStart: va=0x%X (4 dwords)", va);
+    RING_DEBUG_RAW("ringEmitBatchStartSeqno: va=0x%X seqno=%u store=0x%X (%u dwords)",
+                   va, seqno, seqnoAddr, dwords);
     return true;
+}
+
+bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va)
+{
+    return ringEmitBatchStartSeqno(ring, va, 0);
 }
 
 bool ringEmitFlushDW(MyIntelRing *ring, bool flushGFX, bool flushMedia)

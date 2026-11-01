@@ -93,6 +93,7 @@ bool MyIntelFramebuffer::init(OSDictionary *dict)
     fPowerOnCount   = 0;
     fPowerOffCount  = 0;
     fApertureCount  = 0;
+    fLocationRetry  = 0;
     fLocationTimer  = nullptr;
     fModeCount      = 0;
     fEDIDParser     = NULL;
@@ -198,7 +199,7 @@ bool MyIntelFramebuffer::start(IOService *provider)
                         IOByteCount edidLen = 128;
                         IOReturn err = getDDCBlock(0, 0, 0, 0, edidBuf, &edidLen);
                         if (err == kIOReturnSuccess && edidLen >= 128) {
-                            edidDC = OSData::withBytes(edidBuf, edidLen);
+                            edidDC = OSData::withBytes(edidBuf, (unsigned int)edidLen);
                         }
                     }
                     if (!edidDC) {
@@ -300,8 +301,20 @@ void MyIntelFramebuffer::locationTimerFired(OSObject *owner, IOTimerEventSource 
         it->release();
     }
     if (!found) {
-        IOLog("MyIntelFB: location timer AppleDisplay not found, retry 2s\n");
+        if (self->fLocationRetry >= 5) {
+            IOLog("MyIntelFB: location timer exhausted, stopping retries\n");
+            if (sender) sender->cancelTimeout();
+            if (sender) {
+                if (IOWorkLoop *wl = sender->getWorkLoop()) wl->removeEventSource(sender);
+            }
+            if (self->fLocationTimer) { self->fLocationTimer->release(); self->fLocationTimer = nullptr; }
+            return;
+        }
+        self->fLocationRetry++;
+        IOLog("MyIntelFB: location timer AppleDisplay not found, retry %u/5 in 2s\n", (unsigned)self->fLocationRetry);
         sender->setTimeoutMS(2000);
+    } else {
+        if (sender) sender->cancelTimeout();
     }
 }
 
@@ -792,6 +805,16 @@ void MyIntelFramebuffer::ensureModeList(void)
     FBLog("ensureModeList: created default 1920x1080@60 (mode=%u)", (unsigned)fCurrentModeID);
 }
 
+/* Restored 2026-10-28: commit 4037ba8 dropped this definition while start()
+ * (line 162) kept calling it, leaving an undefined external in the kext.
+ * OSKext::load rejects unresolved symbols, so the driver never appeared in
+ * kextstat. Body matches 4aebbb3 / คลังข้อมูล snapshot. */
+void MyIntelFramebuffer::setupDefaultMode(void)
+{
+    fCurrentModeID = MYFB_DEFAULT_MODE_ID;
+    fCurrentDepth  = 0;
+}
+
 bool MyIntelFramebuffer::createVRAMDescriptor(void)
 {
     if (!fGPU) return false;
@@ -841,6 +864,9 @@ bool MyIntelFramebuffer::createVRAMDescriptor(void)
         } else {
             FBLog("VRAM: stolen map 0x%llX size %u MB (%u bytes) — Phase 4.2 REAL",
                   stolenBase, stolenSize >> 20, stolenSize);
+             /* Intel registry-dump baseline (validated 8/19/2024 Windows DCH). */
+             if (stolenSize < (16 * 1024 * 1024))
+                 FBLog("WARN: stolen size below 16 MB baseline (%u B)", stolenSize);
         }
     }
 
@@ -915,10 +941,17 @@ static const UInt8 kdbKDB0924_EDID[128] = {
 
     setProperty("built-in", kOSBooleanTrue);
 
-    /* IOFBNeedsRefresh — tells CoreDisplay this framebuffer needs refresh.
-     * Without this, CoreDisplay logs "IOFBNeedsRefresh key not found in IORegistry"
-     * and "device_preserves_framebuffer: needs_refresh = NO" causing display issues. */
-    setProperty("IOFBNeedsRefresh", kOSBooleanTrue);
+    /* IOFBNeedsRefresh — low-CPU default OFF.
+     *
+     * True makes CoreDisplay treat this plane as continuously refresh-
+     * hungry, which keeps WindowServer rendering even while idle and can
+     * push it well above the 5% target. Leaving it false lets the
+     * compositor redraw only on damage/events. Opt back in for debugging
+     * via boot-arg myintelfbrefresh=1. */
+    UInt32 needRefresh = 0;
+    PE_parse_boot_argn("myintelfbrefresh", &needRefresh, sizeof(needRefresh));
+    setProperty("IOFBNeedsRefresh",
+                needRefresh ? kOSBooleanTrue : kOSBooleanFalse);
 
     OSString *modeStr = OSString::withCString("1920x1080 @ 60Hz");
     if (modeStr) { setProperty("display-mode", modeStr); modeStr->release(); }
@@ -1083,7 +1116,7 @@ bool MyIntelFramebuffer::detectAndParseEDID(void)
     }
 
     /* Parse EDID */
-    if (!fEDIDParser->parse(edidBuf, edidLen)) {
+    if (!fEDIDParser->parse(edidBuf, (UInt32)edidLen)) {
         FBLog("detectAndParseEDID: EDID parse failed");
         fEDIDParser->release();
         fEDIDParser = NULL;
@@ -1139,7 +1172,7 @@ void MyIntelFramebuffer::buildModeListFromEDID(void)
             t.stereo = stereo;
 
             initModeFromTiming(modeID, &t);
-            fModes[i].modeID = modeID;
+            fModes[i].modeID = (IODisplayModeID)modeID;
             fModes[i].valid = true;
             modeID++;
         }
@@ -1160,12 +1193,17 @@ void MyIntelFramebuffer::initModeFromTiming(UInt32 index, const MyIntelEDIDParse
     bzero(info, sizeof(IODisplayModeInformation));
     bzero(pixInfo, sizeof(IOPixelInformation));
 
-    if (t) {
+    bool validTiming = (t && t->hActive > 0 && t->vActive > 0 &&
+                   (t->hActive + (uint32_t)t->hBlank) > 0 &&
+                   (t->vActive + (uint32_t)t->vBlank) > 0 &&
+                   t->pixelClock > 0);
+
+    if (validTiming) {
         /* Use parsed EDID timing */
         info->nominalWidth = t->hActive;
         info->nominalHeight = t->vActive;
-        info->refreshRate = ((t->pixelClock * 1000ULL) << 16) /
-                            ((t->hActive + t->hBlank) * (t->vActive + t->vBlank));
+        info->refreshRate = (IOFixed1616)(((t->pixelClock * 1000ULL) << 16) /
+                            ((t->hActive + t->hBlank) * (t->vActive + t->vBlank)));
         info->maxDepthIndex = 0;
         info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag;
         if (index == 0) info->flags |= kDisplayModeDefaultFlag;

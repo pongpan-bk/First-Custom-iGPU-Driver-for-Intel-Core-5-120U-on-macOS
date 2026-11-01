@@ -510,11 +510,8 @@ IOReturn MyIntelGPUClient::externalMethod(uint32_t selector, IOExternalMethodArg
             arguments->scalarOutput[0] = fProvider->accelStepStart() ? 1 : 0;
             return kIOReturnSuccess;
         }
-        case 23: { // AccelPadProps — Door-A eGPU trick live injection
-            if (!fProvider) return kIOReturnNotReady;
-            fProvider->accelPadProps();
-            return kIOReturnSuccess;
-        }
+        case 23: // AccelPadProps is not supported by the diagnostic accelerator
+            return kIOReturnUnsupported;
         case 24: { // AccelBatchBlit — hypothesis #10 BATCH+BB_START probe
             if (!fProvider) return kIOReturnNotReady;
             if (arguments->scalarOutputCount < 1) return kIOReturnBadArgument;

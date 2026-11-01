@@ -32,25 +32,32 @@
  * ─────────────────────────────────────────────
  *  bool MyIntelGPU::initMediaEngines(void)
  *
- *  Detect VDBOX and VEBOX availability by reading
- *  the GEN11_GT_VEBOX_VDBOX_DISABLE register (0x138010).
+ *  Native Gen12 LP media topology (ADL-P / RPL-U).
  *
- *  Also initialize instance tracking structs so that
- *  media pipeline code can reference them later.
+ *  The legacy GEN11_GT_VEBOX_VDBOX_DISABLE register (0x138010) is a
+ *  Gen9-era *disable* mask: bit = 1 means "fused off". On a7ac it reads
+ *  0x00000000, and interpreting that zero with Gen9 semantics ("nothing
+ *  disabled") falsely exposes the absent VDBOX2/VDBOX3 slots. A submit
+ *  to those phantom engines faults the GT (MMIO fault / hang / black
+ *  screen), so this driver no longer derives topology from 0x138010.
  *
- *  VDBOX index mapping (RPL-P):
- *    Index 0: VCS0  @ 0x1C0000  — MFX0
- *    Index 1: VCS1  @ 0x1C4000  — MFX1
- *    Index 2: VCS2  @ 0x1D0000  — MFX2
- *    Index 3: VCS3  @ 0x1D4000  — MFX3
+ *  This driver currently enumerates the ADL-P/RPL-U topology documented by
+ *  i915: VCS0, VCS2, and VECS0. This is a platform whitelist, not a
+ *  runtime fuse read; do not expose additional engines until their fuse
+ *  semantics and command paths have been validated on the target hardware.
+ *  bit = 1 -> supported instance.
  *
- *  VEBOX index mapping (RPL-P):
- *    Index 0: VECS0 @ 0x1C8000  — VEBOX0
- *    Index 1: VECS1 @ 0x1D8000  — VEBOX1
+ *    bit 0  -> VDBOX[0] VCS0  @ 0x1C0000
+ *    bit 1  -> VDBOX[1] VCS2  @ 0x1D0000  (second physical VDBOX)
+ *    bit 16 -> VEBOX[0] VECS0 @ 0x1C8000
+ *    bit 17 -> VEBOX[1] VECS1 @ 0x1D8000
  *
- *  Disable mask format:
- *    Bits [0:3]    = VDBOX disable (bit n → VCSn disabled)
- *    Bits [16:17]  = VEBOX disable (bit 16+n → VECSn disabled)
+ *  VDBOX[2] (VCS1 @ 0x1C4000) and VDBOX[3] (VCS3 @ 0x1D4000) are not
+ *  instantiated on U-series silicon and stay disabled.
+ *
+ *  Upstream cross-check: i915 adl_p_info advertises VCS0, VCS2, and VECS0.
+ *  Enumeration is not proof of command-submission support; ring status is
+ *  published separately after hardware initialization.
  *
  *  @return true if at least one VDBOX is available
  * ─────────────────────────────────────────────
@@ -64,23 +71,34 @@ bool MyIntelGPU::initMediaEngines(void)
         return false;
     }
 
-    /* Read VDBOX/VEBOX disable mask (GEN11_GT_VEBOX_VDBOX_DISABLE = 0x138010) */
-    uint32_t vdboxDisableMask = readReg32(0x138010);
-    fVdboxDisableMask = vdboxDisableMask;
-    IODebug("MediaEngines: VDBOX/VEBOX disable mask = 0x%08X", vdboxDisableMask);
+    /* This implementation only supports the Raptor Lake-U device in Info.plist.
+     * 0x138010 is deliberately not treated as a Gen12 fuse-enable mask. */
+    const uint32_t gen12SupportedMediaMask = fDeviceID == 0xA7AC
+        ? 0x00010003U  /* VDBOX0, VDBOX1 and VEBOX0 */
+        : 0U;
+    if (gen12SupportedMediaMask == 0) {
+        IODebug("MediaEngines: unsupported PCI device 0x%04X — keeping engines disabled",
+                fDeviceID);
+    }
+
+    fVdboxDisableMask = (~gen12SupportedMediaMask) & 0x0003000FU;
+    IODebug("MediaEngines: supported mask = 0x%08X (disable mask = 0x%08X)",
+            gen12SupportedMediaMask, fVdboxDisableMask);
 
     /* ── Detect VDBOX instances (VCS0-VCS3) ── */
-    static const uint32_t vdboxBases[] = { 0x1C0000, 0x1C4000, 0x1D0000, 0x1D4000 };
+    static const uint32_t vdboxBases[] = {
+        VCS0_BASE_REAL, VCS2_BASE_REAL, 0x1C4000, 0x1D4000
+    };
     fActiveVdboxCount = 0;
 
     for (int i = 0; i < 4; i++) {
-        bool available = !(vdboxDisableMask & (1U << i));
+        bool available = (gen12SupportedMediaMask & (1U << i)) != 0;
         fVdboxInstances[i].mmioBase  = vdboxBases[i];
         fVdboxInstances[i].sfcBase   = vdboxBases[i] + 0x9000;
         fVdboxInstances[i].auxInvReg = 0;
         fVdboxInstances[i].index     = (uint8_t)i;
         fVdboxInstances[i].hasSfc    = true;
-        fVdboxInstances[i].initialized = available;
+        fVdboxInstances[i].enumerated = available;
 
         if (available) {
             fActiveVdboxCount++;
@@ -95,11 +113,11 @@ bool MyIntelGPU::initMediaEngines(void)
     fActiveVeboxCount = 0;
 
     for (int i = 0; i < 2; i++) {
-        bool available = !(vdboxDisableMask & (1U << (16 + i)));
+        bool available = (gen12SupportedMediaMask & (1U << (16 + i))) != 0;
         fVeboxInstances[i].mmioBase  = veboxBases[i];
         fVeboxInstances[i].auxInvReg = 0;
         fVeboxInstances[i].index     = (uint8_t)i;
-        fVeboxInstances[i].initialized = available;
+        fVeboxInstances[i].enumerated = available;
 
         if (available) {
             fActiveVeboxCount++;
@@ -109,7 +127,7 @@ bool MyIntelGPU::initMediaEngines(void)
         }
     }
 
-    IODebug("MediaEngines: Found %u VDBOX + %u VEBOX",
+    IODebug("MediaEngines: enumerated %u VDBOX + %u VEBOX",
             fActiveVdboxCount, fActiveVeboxCount);
     return (fActiveVdboxCount > 0);
 }
@@ -121,19 +139,21 @@ bool MyIntelGPU::initMediaEngines(void)
  * ─────────────────────────────────────────────
  *  void MyIntelGPU::setMediaClockGating(void)
  *
- *  Disable clock gating on IECP, ALN, and MFXPIPE
- *  units within the VDBOX global register block.
+ *  Disable clock gating on IECP and ALN inside
+ *  each present VDBOX instance.
  *
  *  Without this, the media pipeline may stall
  *  when exiting deep C-states (RC6).
  *
- *  Register layout (VDBOX global base = VCS0 + 0x6000):
- *    base + 0x3F10  → CGCTL_IECP  (bit 22 = disable)
- *    base + 0x3F18  → CGCTL_ALN   (bit 13 = disable)
- *    base + 0x3F1C  → CGCTL_MFXPIPE (bit 3 = disable)
+ *  Register layout (offsets are relative to the
+ *  VDBOX *instance* mmio_base — i915
+ *  gt/intel_engine_regs.h:255 VDBOX_CGCTL3F10(base)):
+ *    base + 0x3F10  → CGCTL3F10 · IECPUNIT_CLKGATE_DIS bit 22
+ *    base + 0x3F18  → CGCTL3F18 · ALNUNIT_CLKGATE_DIS  bit 13
  *
- *  Reference: xe_media.c — media_gt_init
- *             i915_reg.h — VDBOX_CGCTL3F10/3F18/3F1C
+ *  These registers live in the media forcewake
+ *  domains (i915 intel_uncore.c:1349), so they
+ *  read back 0 unless VDBOX forcewake is held.
  * ─────────────────────────────────────────────
  */
 void MyIntelGPU::setMediaClockGating(void)
@@ -142,27 +162,33 @@ void MyIntelGPU::setMediaClockGating(void)
 
     if (!fRegs || !isValidRegs()) return;
 
-    /* VDBOX global base = VCS0 base + 0x6000 */
-    uint32_t vdboxGlobalBase = 0x1C0000 + 0x6000;
+    mediaForceWakeGet();
 
-    /* Disable clock gating for IECP */
-    uint32_t cg3f10 = readReg32(vdboxGlobalBase + 0x3F10);
-    cg3f10 |= (1U << 22);   /* VDBOX_CGCTL_IECP_DIS */
-    writeReg32(vdboxGlobalBase + 0x3F10, cg3f10);
+    static const int vdboxInstances[] = { 0, 1 };
 
-    /* Disable clock gating for ALN */
-    uint32_t cg3f18 = readReg32(vdboxGlobalBase + 0x3F18);
-    cg3f18 |= (1U << 13);   /* VDBOX_CGCTL_ALN_DIS */
-    writeReg32(vdboxGlobalBase + 0x3F18, cg3f18);
+    for (size_t n = 0; n < sizeof(vdboxInstances) / sizeof(vdboxInstances[0]); n++) {
+        int i = vdboxInstances[n];
+        if (!fVdboxInstances[i].enumerated) continue;
 
-    /* Disable clock gating for MFXPIPE */
-    uint32_t cg3f1c = readReg32(vdboxGlobalBase + 0x3F1C);
-    cg3f1c |= (1U << 3);    /* VDBOX_CGCTL_MFXPIPE_DIS */
-    writeReg32(vdboxGlobalBase + 0x3F1C, cg3f1c);
+        uint32_t base = fVdboxInstances[i].mmioBase;
 
-    IODebug("MediaEngines: Clock gating disabled "
-            "(CGCTL: IECP=0x%08X, ALN=0x%08X, MFXPIPE=0x%08X)",
-            cg3f10, cg3f18, cg3f1c);
+        uint32_t iecpBefore = readReg32(base + VDBOX_CGCTL_3F10_OFF);
+        writeReg32(base + VDBOX_CGCTL_3F10_OFF, iecpBefore | VDBOX_CGCTL_IECP_DIS);
+        uint32_t iecpAfter = readReg32(base + VDBOX_CGCTL_3F10_OFF);
+
+        uint32_t alnBefore = readReg32(base + VDBOX_CGCTL_3F18_OFF);
+        writeReg32(base + VDBOX_CGCTL_3F18_OFF, alnBefore | VDBOX_CGCTL_ALN_DIS);
+        uint32_t alnAfter = readReg32(base + VDBOX_CGCTL_3F18_OFF);
+
+        IODebug("MediaEngines: CGCTL VDBOX%d base=0x%06X "
+                "IECP 0x%08X->0x%08X (bit22 %s) "
+                "ALN 0x%08X->0x%08X (bit13 %s)",
+                i, base,
+                iecpBefore, iecpAfter,
+                (iecpAfter & VDBOX_CGCTL_IECP_DIS) ? "LATCHED" : "DROPPED",
+                alnBefore, alnAfter,
+                (alnAfter & VDBOX_CGCTL_ALN_DIS) ? "LATCHED" : "DROPPED");
+    }
 }
 
 #pragma mark -
@@ -172,44 +198,29 @@ void MyIntelGPU::setMediaClockGating(void)
  * ─────────────────────────────────────────────
  *  void MyIntelGPU::publishMediaProperties(void)
  *
- *  Set IORegistry properties so that macOS
- *  VideoToolbox / AVFoundation can discover
- *  the GPU's media capabilities.
+ *  Publish enumerated topology and command-ring status separately.
  *
- *  Properties published:
- *    IntelMediaCapable     (bool)    — media engine present
- *    HevcDecoding          (bool)    — HEVC decode support
- *    HevcEncoding          (bool)    — HEVC encode support
- *    AV1Decoding           (bool)    — AV1 decode support
- *    H264Decoding          (bool)    — H.264 decode support
- *    H264Encoding          (bool)    — H.264 encode support
- *    VP9Decoding           (bool)    — VP9 decode support
- *    VDBOXCount            (uint32)  — active VDBOX instances
- *    VEBOXCount            (uint32)  — active VEBOX instances
- *    MaxDecodeResolution   (string)  — max decode resolution
- *    MaxEncodeResolution   (string)  — max encode resolution
- *
- *  Reference: AppleGraphicsControl, IOGraphicsFamily
- *             AppleIntelGraphicsDriver shim
+ *  Codec capabilities are intentionally not published here: the current
+ *  VCS command path is not integrated with VideoToolbox / AppleGVA.
  * ─────────────────────────────────────────────
  */
 void MyIntelGPU::publishMediaProperties(void)
 {
     IODebug("Phase 7: publishMediaProperties()");
 
-    setProperty("IntelMediaCapable",     true);
-    setProperty("HevcDecoding",          true);
-    setProperty("HevcEncoding",          true);
-    setProperty("AV1Decoding",           true);
-    setProperty("H264Decoding",          true);
-    setProperty("H264Encoding",          true);
-    setProperty("VP9Decoding",           true);
+    setProperty("IntelMediaCapable",     fActiveVdboxCount > 0);
     setProperty("VDBOXCount",            fActiveVdboxCount);
     setProperty("VEBOXCount",            fActiveVeboxCount);
-    setProperty("MaxDecodeResolution",   "8192x8192");
-    setProperty("MaxEncodeResolution",   "4096x4096");
+    setProperty("VDBOXEnumeratedCount",  fActiveVdboxCount);
+    setProperty("VEBOXEnumeratedCount",  fActiveVeboxCount);
+    setProperty("VCS0RingInitialized",   fRingVCS != NULL);
+    setProperty("VCS2RingInitialized",   fRingVCS2 != NULL);
+    setProperty("VECS0RingInitialized",  false);
+    uint32_t mediaStatus = (fActiveVdboxCount > 0)
+        ? ((fRingVCS != NULL) ? 2 : 1) : 0;
+    setProperty("IntelMediaStatus", (uint64_t)mediaStatus, 32);
 
-    IODebug("MediaEngines: IORegistry properties published");
+    IODebug("MediaEngines: diagnostic topology published; codec API not advertised");
 }
 
 #pragma mark -

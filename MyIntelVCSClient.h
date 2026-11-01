@@ -7,6 +7,7 @@
 #include "myintel_vcs_user.h"
 
 class MyIntelGPU;
+struct MyIntelRing;
 
 /*
  * MyIntelVCSClient — IOUserClient for VCS command submission
@@ -71,6 +72,8 @@ public:
                                         IOExternalMethodArguments *args);
     static IOReturn waitForCompletion(OSObject *target, void *reference,
                                       IOExternalMethodArguments *args);
+    static IOReturn waitForCompletionVCS2(OSObject *target, void *reference,
+                                          IOExternalMethodArguments *args);
     static IOReturn getVCSStatus(OSObject *target, void *reference,
                                  IOExternalMethodArguments *args);
     static IOReturn mapOutputBuffer(OSObject *target, void *reference,
@@ -81,6 +84,8 @@ public:
                                    IOExternalMethodArguments *args);
     static IOReturn submitVCSWorkload(OSObject *target, void *reference,
                                       IOExternalMethodArguments *args);
+    static IOReturn submitVCS2Workload(OSObject *target, void *reference,
+                                       IOExternalMethodArguments *args);
     static IOReturn gemCreate(OSObject *target, void *reference,
                               IOExternalMethodArguments *args);
     static IOReturn gemDestroy(OSObject *target, void *reference,
@@ -93,6 +98,12 @@ public:
     /* 2.0.252: read-only engine state dump (LRC head/tail, CSB, scratch) */
     static IOReturn engineDiag(OSObject *target, void *reference,
                                IOExternalMethodArguments *args);
+    static IOReturn engineResetVCS2(OSObject *target, void *reference,
+                                    IOExternalMethodArguments *args);
+    static IOReturn engineDiagVCS2(OSObject *target, void *reference,
+                                   IOExternalMethodArguments *args);
+    static IOReturn getContextInfoVCS2(OSObject *target, void *reference,
+                                      IOExternalMethodArguments *args);
     /* 2.0.260: map external physical address (IOSurface) into PPGTT */
     static IOReturn mapExternalPhys(OSObject *target, void *reference, IOExternalMethodArguments *args);
     /* 2.0.261: Get VideoToolbox decoder configuration */
@@ -112,6 +123,13 @@ private:
     void freeAllGemBuffers(void);
     /* 2.0.260 — unbind every external (IOSurface) GGTT region still live */
     void freeAllExternalMappings(void);
+    /* 2.0.251+: core reset logic shared by engineReset (external) and
+     * submitVCSWorkload (internal).  Does NOT touch args output fields. */
+    IOReturn submitVCSWorkloadToRing(IOExternalMethodArguments *args,
+                                     MyIntelRing *ring);
+    IOReturn waitForRingCompletion(IOExternalMethodArguments *args,
+                                   MyIntelRing *ring);
+    IOReturn doEngineResetCore(MyIntelRing *ring, uint32_t resetDomain);
 
     MyIntelGPU *fProvider;
     task_t      fTask;

@@ -69,7 +69,7 @@ bool vcsCmdMfxSurfaceState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t heigh
     /* DWORD 2: Surface format (NV12=1, P010=3) + tiling (linear=0, tileY=4) */
     uint32_t hwFormat = 1; /* NV12 default */
     if (format == 0x01) hwFormat = 3;  /* P010 */
-    dwords[2] = (hwFormat & 0xF) | ((linear ? 0 : 4) << 16); /* linear=0, tileY=4 */
+    dwords[2] = (hwFormat & 0xF) | ((linear ? 0u : 4u) << 16); /* linear=0, tileY=4 */
 
     /* DWORD 3: Pitch = width * bpp (for NV12: width) */
     dwords[3] = width;
@@ -191,7 +191,6 @@ bool vcsCmdMfxRefIdxState(MyIntelVCSCmdBuf *buf, uint32_t frameNum, uint32_t pic
     return vcsCmdEmitBatch(buf, dwords, 2);
 }
 
-/*
 /*
  * ──────────────────────────────────────────────────────────────────────────
  *  Gen12 HCP HEVC decode command sequence
@@ -824,14 +823,16 @@ bool vcsCmdG12IndObj(MyIntelVCSCmdBuf *buf, uint32_t ggtt, uint32_t size,
 bool vcsCmdG12BspBufBaseAddr(MyIntelVCSCmdBuf *buf, uint32_t bsdMpcGgtt,
                              uint32_t mprGgtt)
 {
-    const uint32_t kMocsWb = 2;
+    (void)bsdMpcGgtt;
+    (void)mprGgtt;
+    const uint32_t kCacheSelectInternal = 1u << 12; /* DW3/DW6 bit 12 */
     uint32_t d[10];
     memset(d, 0, sizeof(d));
     d[0] = 0x70040008;                       /* len=8 → 10 dwords, SubOpB=4, pipeline=2, type=3 */
-    d[1] = bsdMpcGgtt & ~0x3Fu;              /* DW1 BSD/MPC row store [P14 in-place] */
-    d[3] = kMocsWb;                          /* DW3 BSD/MPC attributes */
-    d[4] = mprGgtt & ~0x3Fu;                 /* DW4 MPR row store [P14] */
-    d[6] = kMocsWb;                          /* DW6 MPR attributes */
+    d[1] = 0;                                /* DW1 BSD/MPC internal base = 0 */
+    d[3] = kCacheSelectInternal;             /* DW3 internal media storage */
+    d[4] = 256u << 6;                        /* DW4 MPR internal base = 256 (field bits 6..31) */
+    d[6] = kCacheSelectInternal;             /* DW6 internal media storage */
     return vcsCmdEmitBatch(buf, d, 10);
 }
 
@@ -867,11 +868,15 @@ bool vcsCmdG12QmState(MyIntelVCSCmdBuf *buf)
         if (!vcsCmdEmitBatch(buf, d, 18)) return false;
     }
 
-    /* 8x8: 64 bytes ต่อคำสั่ง */
+    /* 8x8: 64 bytes ต่อคำสั่ง
+     * [FIX 2026-11-01] stream ที่ไม่มี custom scaling list ต้องส่ง FLAT 16 เท่านั้น
+     * ถ้าใส่ default H.264 matrix (6..42 / 9..35) HW จะ dequant เกิน -> contrast
+     * หาย ~17% (PSNR 21dB); flat = bit-exact กับ ffmpeg (MD5 d88b9dc9...)
+     * MFX_QM_DEFAULT=1 (userspace) เก็บไว้เทสย้อนหลังเท่านั้น */
 #ifdef KERNEL
-    bool qmFlat = false;
+    bool qmFlat = true;
 #else
-    bool qmFlat = getenv("MFX_QM_FLAT") != NULL;
+    bool qmFlat = getenv("MFX_QM_DEFAULT") == NULL;
 #endif
     for (uint32_t type = 2; type <= 3; type++) {
         memset(d, 0, sizeof(d));
@@ -933,10 +938,13 @@ bool vcsCmdG12AvcImgState(MyIntelVCSCmdBuf *buf,
            (0u << 5)                          |           /* constrained ipred */
            (0u << 6)                          |           /* img disposable: IDR = reference -> 0 (driver !ref_pic_flag) */
            ((entropy & 1) << 7)               |           /* entropy coding */
+           (1u << 8)                          |           /* MBMVFORMATFLAG=1 (Long MV format, iHD gen12) */
            ((chromaIdc & 3) << 10);
-    d[13] = ((uint32_t)picInitQp & 0xFF) |          /* InitialQp bits0-7 */
-            ((numRefL0Active & 0x3F) << 8) |         /* NumActiveRefL0 bits8-13 */
-            ((numRefL1Active & 0x3F) << 16) |       /* NumActiveRefL1 bits16-21 */
+    /* HW wants the raw PPS field pic_init_qp_minus26, not the absolute QP
+     * (iHD: cmd.DW13.InitialQpValue = avcPicParams->pic_init_qp_minus26) */
+    d[13] = ((uint32_t)(picInitQp - 26) & 0xFF) |   /* InitialQp bits0-7 */
+            (((numRefL0Active == 0 ? 1 : numRefL0Active) & 0x3F) << 8) |         /* NumActiveRefL0 bits8-13 */
+            (((numRefL1Active == 0 ? 1 : numRefL1Active) & 0x3F) << 16) |       /* NumActiveRefL1 bits16-21 */
             ((numRefFrames & 0x1F) << 24);          /* NumRefFrames bits24-28 */
     d[14] = (picOrderPresent & 1)             |
             ((deltaPocAlwaysZero & 1) << 1)   |
@@ -947,7 +955,7 @@ bool vcsCmdG12AvcImgState(MyIntelVCSCmdBuf *buf,
     d[15] = (frameNum & 0xFFFF) << 16;                    /* CurrPicFrameNum */
     /* DW5 — driver sets only TrellisQuantizationChromaDisable (bit 27);
      * DW5 bits 8-21 are reserved (chroma QP offsets live in DW3) */
-    d[5] |= (1u << 27);
+    d[5] = (1u << 27);  /* iHD exact: TrellisQuantizationChromaDisable only (TQ rounding 0, TQENB 0) */
     d[6] = 0;
     /* DW7 — driver never writes DW7 for decode (VslTopMbTrans8X8Flag DISABLED) */
     d[7] = 0;
@@ -990,9 +998,9 @@ bool vcsCmdG12AvcSliceState(MyIntelVCSCmdBuf *buf, uint32_t sliceType,
     d[0] = 0x71030009;   /* len=9 → 11 dwords total */
     d[1] = st & 0xF;
     if (st == 0)          /* P-slice */
-        d[2] = (numRefL0Count & 0x3F) << 16;
+        d[2] = ((numRefL0Count == 0 ? 1 : numRefL0Count) & 0x3F) << 16;
     else if (st == 1)     /* B-slice */
-        d[2] = ((numRefL0Count & 0x3F) << 16) | ((numRefL1Count & 0x3F) << 24);
+        d[2] = (((numRefL0Count == 0 ? 1 : numRefL0Count) & 0x3F) << 16) | (((numRefL1Count == 0 ? 1 : numRefL1Count) & 0x3F) << 24);
     /* I-slice → d[2] = 0 ตาม driver */
     d[3] = ((uint32_t)(alphaDiv2 & 0xF))        |
            ((uint32_t)(betaDiv2 & 0xF) << 8)    |

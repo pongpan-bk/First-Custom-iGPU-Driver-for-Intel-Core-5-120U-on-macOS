@@ -6,7 +6,7 @@
  *
  *  กำหนด register map สำหรับ Intel Gen12+ VCS (Video Codec Service) engine:
  *    - VCS0 (Video Decode): MMIO base 0x1C0000
- *    - VCS1 (Video Decode): MMIO base 0x1C4000
+ *    - VCS1 (Video Decode): MMIO base 0x1D0000
  *    - VECS0 (Video Encode): MMIO base 0x1C8000
  *
  *  ใช้สำหรับ hardware H.264/HEVC video decode โดยไม่ต้องผ่าน Metal
@@ -37,8 +37,12 @@ typedef struct MyIntelGPU MyIntelGPU;
  *
  *  Gen12+ (Alder Lake / Raptor Lake) video engines:
  *    VCS0  = 0x1C0000  (Video Decode Instance 0)
- *    VCS1  = 0x1C4000  (Video Decode Instance 1)
+ *    VCS1  = 0x1D0000  (Video Decode Instance 1 — BSD3 slot)
  *    VECS0 = 0x1C8000  (Video Encode Instance 0)
+ *
+ *  Golden reference: i915 debugfs on 8086:a7ac (3 captures, 2 kernel
+ *  versions) shows vcs1 at MMIO base 0x1D0000 — the second VDBox sits
+ *  in the BSD3 slot. BSD2 (0x1C4000) is not instantiated on Gen11+ iGPU.
  *
  *  Note: Coffee Lake (Gen9) VCS was at 0x12000
  *        Gen12+ moved it to 0x1C0000 — this is why translation is needed
@@ -46,7 +50,7 @@ typedef struct MyIntelGPU MyIntelGPU;
  *  Reference: intel_engine_cs.c __engine_mmio_base()
  */
 #define VCS0_MMIO_BASE          0x1C0000
-#define VCS1_MMIO_BASE          0x1C4000
+#define VCS1_MMIO_BASE          0x1D0000
 #define VECS0_MMIO_BASE         0x1C8000
 
 /* Window size for each video engine (4KB) */
@@ -167,7 +171,7 @@ typedef struct MyIntelGPU MyIntelGPU;
  *
  *  The translation window covers:
  *    VCS0:  0x1C0000 - 0x1C3FFF  (16KB)
- *    VCS1:  0x1C4000 - 0x1C7FFF  (16KB)
+ *    VCS1:  0x1D0000 - 0x1D3FFF  (16KB, BSD3 slot)
  *    VECS0: 0x1C8000 - 0x1CBFFF  (16KB)
  */
 #define VCS_MMIO_START          0x1C0000

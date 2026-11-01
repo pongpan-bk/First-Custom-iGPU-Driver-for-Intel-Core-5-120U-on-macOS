@@ -58,8 +58,7 @@ bool MyIntelAccelerator::start(IOService *provider)
         return false;
     }
 
-    /* Properties BEFORE registerService() so consumers see a complete
-     * node on first match. Failure is non-fatal. */
+    /* Publish diagnostic identity before registerService(). */
     if (!publishProperties()) {
         AccelDebug("publishProperties failed (continuing)");
     }
@@ -111,12 +110,12 @@ IOReturn MyIntelAccelerator::newUserClient(task_t resettingTask, void *securityI
     if (!handler) {
         return kIOReturnBadArgument;
     }
+    *handler = NULL;
 
-    /* 🚨 ล่าความจริงหน้างาน: พ่น Log ทุกครั้งที่มีคนมากดกริ่งเรียก 
-     * จะได้เห็นเต็มสองตาว่าตอนกดย่อ/ขยายหน้าต่าง มีตัวเลข Type อะไรยิงเข้ามาก่อกวน */
-    AccelDebug("newUserClient: PROBE TRIGGERED! type=0x%X from task=%p", (unsigned int)type, resettingTask);
+    AccelDebug("newUserClient: type=0x%X from task=%p", (unsigned int)type, resettingTask);
 
-    if (type == kMyIntelAccelInfoClientType) {
+    if (type == kMyIntelAccelInfoClientType ||
+        type == kMyIntelAccelMetalClientType) {
         MyIntelAccelClient *client = new MyIntelAccelClient;
         if (!client) {
             return kIOReturnNoMemory;
@@ -136,29 +135,13 @@ IOReturn MyIntelAccelerator::newUserClient(task_t resettingTask, void *securityI
         }
 
         *handler = client;
-        AccelDebug("newUserClient: info client created successfully (task %p)", resettingTask);
+        AccelDebug("newUserClient: client type=0x%X created successfully (task %p)",
+                   (unsigned int)type, resettingTask);
         return kIOReturnSuccess;
     }
 
-    /* 🚨 ท่อพักสายชั่วคราว (Pass-through Test): ถ้า WindowServer ยิง Type อื่น (เช่น 0, 1, 2) มาขอเปิดคลาส 
-     * เราจะแกล้งทำเป็นยอมรับ เพื่อหลอกไม่ให้ WindowServer ปฏิเสธการทำงานและสั่งเด้งกลับไปใช้ CPU 
-     * รอดูหน้างานสดๆ เลยว่าอาการหน่วงแล็กส้นตีนตอนย่อแอปจะหายไปหรือไม่ */
-    if (type >= 0 && type <= 0x30) {
-        MyIntelAccelClient *testClient = new MyIntelAccelClient;
-        if (testClient) {
-            if (testClient->initWithTask(resettingTask, securityID, type, properties) &&
-                testClient->attach(this) &&
-                testClient->start(this)) {
-                *handler = testClient;
-                AccelDebug("newUserClient: EXPERIMENTAL PASS-THROUGH FOR TYPE 0x%X (WindowServer Soft-Lock Bypass)", (unsigned int)type);
-                return kIOReturnSuccess;
-            }
-            if (testClient) testClient->release();
-        }
-    }
-
-    /* ปฏิเสธเสียงแข็งสำหรับคีย์ขยะแปลกปลอมตัวอื่นๆ นอกเหนือช่วงทดสอบ */
-    AccelDebug("newUserClient: unsupported type 0x%X from task %p — REJECTING CLEANLY", (unsigned int)type, resettingTask);
+    AccelDebug("newUserClient: unsupported type 0x%X from task %p",
+               (unsigned int)type, resettingTask);
     return kIOReturnUnsupported;
 }
 
@@ -168,90 +151,6 @@ bool MyIntelAccelerator::publishProperties(void)
 
     /* model — System Profiler GPU naming (real silicon: Raptor Lake-U 0xA7AC) */
     setProperty("model", "Intel Iris Xe");
-
-    /* IOAccelIndex — standard accelerator ordinal */
-    setProperty("IOAccelIndex", 0ULL, 32);
-
-    /* IOSourceVersion — 6-byte OSData (SP reads it) */
-    {
-        uint8_t srcVer[6] = { 0, 0, 0, 0, 0, 0 };
-        OSData *d = OSData::withBytes(srcVer, sizeof(srcVer));
-        if (d) {
-            setProperty("IOSourceVersion", d);
-            d->release();
-        }
-    }
-
-    /* IOAccelDisplayPipeCapabilities — default DENY; opt-in via boot-arg
-     * myinteldisplaypipe=1 (Wave5 last-step, gated for safety) */
-    {
-        char dpArg[8] = {0};
-        bool dpOn = false;
-        if (PE_parse_boot_argn("myinteldisplaypipe", dpArg, sizeof(dpArg))) dpOn = (dpArg[0] == '1');
-        OSDictionary *caps = OSDictionary::withCapacity(2);
-        if (caps) {
-            caps->setObject("DisplayPipeSupported", dpOn ? kOSBooleanTrue : kOSBooleanFalse);
-            caps->setObject("TransactionsSupported", dpOn ? kOSBooleanTrue : kOSBooleanFalse);
-            setProperty("IOAccelDisplayPipeCapabilities", caps);
-            caps->release();
-            IOLog("MyIntelAccelerator: DisplayPipe gate myinteldisplaypipe=%d -> %s\n", dpOn, dpOn ? "Yes" : "No");
-        }
-    }
-
-
-
-    /* PerformanceStatistics — telemetry surface for SP/AGPM/WindowServer.
-     * Adding "Counter" (monotonic uint64) + "GPUActivityInPercent" (0..100)
-     * satisfies AGPM's poll contract — it stops re-querying on every vsync
-     * once these keys are present and stable. */
-    {
-        OSDictionary *perf = OSDictionary::withCapacity(4);
-        if (perf) {
-            uint64_t poolBytes = fGPU ? fGPU->getVramPoolSize() : 0;
-            OSNumber *total   = OSNumber::withNumber(poolBytes, 64);
-            OSNumber *freeN   = OSNumber::withNumber(poolBytes, 64);
-            OSNumber *counter = OSNumber::withNumber((uint64_t)0, 64);
-            OSNumber *gpuAct  = OSNumber::withNumber((uint64_t)0, 32);
-            if (total)   { perf->setObject("vramTotalBytes",        total);   total->release();   }
-            if (freeN)   { perf->setObject("vramFreeBytes",         freeN);   freeN->release();   }
-            if (counter) { perf->setObject("Counter",               counter); counter->release(); }
-            if (gpuAct)  { perf->setObject("GPUActivityInPercent",  gpuAct);  gpuAct->release();  }
-            setProperty("PerformanceStatistics", perf);
-            perf->release();
-        }
-    }
-
-    /* IOAccelRevision + IOAccelTypes — WindowServer caches these on first
-     * match; without them it re-probes every time the display wakes. */
-    setProperty("IOAccelRevision", (uint64_t)0x0001, 32);
-    setProperty("IOAccelTypes",    (uint64_t)0x0001, 32);
-
-    /* Metal plugin binding — Metal framework reads MetalPluginName off the
-     * accelerator node and probes /Library/GPUBundles/<MetalPluginName>.bundle
-     * (MISSION-D M1/M1.5). Without these keys Metal never looks for our bundle. */
-    setProperty("MetalPluginName", "MyIntelGPUMTLDriver");
-    setProperty("MetalPluginClassName", "MyIntelGPUMTLDevice");
-
-    setProperty("VDBOXSupported", kOSBooleanTrue);
-    setProperty("MyIntelVCSReady", kOSBooleanTrue);
-
-    bool r;
-    /*  VT codec discovery — AppleGVA reads these on IOAccelerator
-     *  Property names from iMac20,1 / AppleIO / AGX kext extracts
-     *  IOGVACodec tells AppleGVA which GPU generation to look for
-     *  IOGVA*Decode/Encode = "1" means HW codec available            */
-    r = setProperty("IOGVACodec",      "Gen12HP");          AccelDebug("  IOGVACodec=%d", (int)r);
-    r = setProperty("IOVARendererID",  (uint64_t)0x1080100, 32); AccelDebug("  IOVARendererID=%d", (int)r);
-    r = setProperty("IOGVAH264Decode", "1");                AccelDebug("  IOGVAH264Decode=%d", (int)r);
-    r = setProperty("IOGVAH264Encode", "1");                AccelDebug("  IOGVAH264Encode=%d", (int)r);
-    r = setProperty("IOGVAHEVCDecode", "1");                AccelDebug("  IOGVAHEVCDecode=%d", (int)r);
-    r = setProperty("IOGVAHEVCEncode", "1");                AccelDebug("  IOGVAHEVCEncode=%d", (int)r);
-    r = setProperty("IOGVA_AV1Decode", "1");                AccelDebug("  IOGVA_AV1Decode=%d", (int)r);
-    r = setProperty("IOGVP9Decode",    "1");                AccelDebug("  IOGVP9Decode=%d", (int)r);
-
-
-    AccelDebug("publishProperties: GVA done");
-
 
     return ok;
 }
@@ -295,12 +194,19 @@ bool MyIntelAccelClient::start(IOService *provider)
 
 IOReturn MyIntelAccelClient::clientClose(void)
 {
+    // [จุดที่ 1: เคลียร์ SurfaceBacking]
+    if (fAccel && fSurfaceID) {
+        fAccel->surfaceReleaseByID(fSurfaceID);
+    }
+
+    // [จุดที่ 2: ล้างแคช Ring]
     if (fDirtyRingMap) { fDirtyRingMap->release(); fDirtyRingMap = NULL; }
     if (fDirtyRingMD) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; }
     fDirtyRingUserVA = 0;
-    AccelDebug("AccelClient clientClose — surface backing persists at provider");
+
+    AccelDebug("AccelClient clientClose — surface %u cleaned up", fSurfaceID);
     terminate();
-    return kIOReturnSuccess;
+    return kIOReturnSuccess; // ยืนยันเนทีฟสิทธิ์ความสำเร็จ
 }
 
 /* ── M2C: Metal device-class client (type 5) — IOAccelerator shared/device contract ──
@@ -330,17 +236,78 @@ static void myAccelNameInitOnce(void)
     gMyAccelNameInit = true;
 }
 
+IOReturn MyIntelAccelClient::setupDirtyRing(IOExternalMethodArguments *arguments)
+{
+    if (!arguments || !arguments->structureOutput || arguments->structureOutputSize < 24)
+        return kIOReturnBadArgument;
+
+    if (!fDirtyRingMD) {
+        fDirtyRingMD = IOBufferMemoryDescriptor::withOptions(kIODirectionInOut | kIOMemoryBufferPageable, 4096, PAGE_SIZE);
+        if (!fDirtyRingMD) return kIOReturnNoMemory;
+        if (fDirtyRingMD->prepare() != kIOReturnSuccess) {
+            fDirtyRingMD->release();
+            fDirtyRingMD = NULL;
+            return kIOReturnNoMemory;
+        }
+        fDirtyRingMap = fDirtyRingMD->createMappingInTask(fClientTask, 0, kIOMapAnywhere);
+        if (!fDirtyRingMap) {
+            fDirtyRingMD->complete();
+            fDirtyRingMD->release();
+            fDirtyRingMD = NULL;
+            return kIOReturnNoMemory;
+        }
+        fDirtyRingUserVA = fDirtyRingMap->getVirtualAddress();
+        IOMemoryMap *kernMap = fDirtyRingMD->map(kIOMapInhibitCache);
+        if (kernMap) {
+            void *kernVA = (void *)kernMap->getVirtualAddress();
+            bzero(kernVA, 4096);
+            *(uint32_t *)((uint8_t *)kernVA + 4) = 64;
+            kernMap->release();
+        } else {
+            IOLog("MyIntelAccelerator::[dirtyRing] ERROR kernMap null, userVA=0x%llx type=%u\n",
+                  fDirtyRingUserVA, (unsigned)fClientType);
+        }
+        IOLog("MyIntelAccelerator::[dirtyRing] allocated userVA=0x%llx cap=64 type=%u\n",
+              fDirtyRingUserVA, (unsigned)fClientType);
+    }
+
+    uint64_t *out = (uint64_t *)arguments->structureOutput;
+    out[0] = fDirtyRingUserVA;
+    out[1] = 0;
+    out[2] = 0;
+    arguments->structureOutputSize = 24;
+    IOLog("MyIntelAccelerator::[dirtyRing] sel10 return va=0x%llx 24B type=%u\n",
+          fDirtyRingUserVA, (unsigned)fClientType);
+    return kIOReturnSuccess;
+}
+
 IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
                                             IOExternalMethodArguments *arguments,
                                             IOExternalMethodDispatch *dispatch,
                                             OSObject *target,
                                              void *reference)
 {
-    /* ── Metal device/shared probe contract (type 5, M2C) ──
-     * IRON RULE: never touch cases below for surface types; this branch is the
-     * ONLY behavioral change for the type-5 client path. */
-    if (fClientType == 5) {
+    if (!arguments) {
+        return kIOReturnBadArgument;
+    }
+
+    if (fClientType == kMyIntelAccelInfoClientType) {
+        if (selector != kMyIntelAccelSelectorGetInfo) {
+            return kIOReturnUnsupported;
+        }
+        return sGetInfo(this, arguments->scalarInput, arguments->scalarInputCount,
+                        arguments->scalarOutput, arguments->scalarOutputCount);
+    }
+
+    if (fClientType == kMyIntelAccelMetalClientType) {
         myAccelNameInitOnce();
+
+        /* IOAccelSharedSetupDirtyRing uses selector 10 and a 24-byte output. */
+        if (selector == 10 && arguments->structureOutput &&
+            arguments->structureOutputSize >= 24) {
+            return setupDirtyRing(arguments);
+        }
+
         switch (selector) {
         case 9: { /* set API property name — 16B structIn e.g. "Metal\0..." */
             AccelDebug("DISC M2C sel=9 apiName stIn=%lu stOut=%lu",
@@ -357,33 +324,6 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
             AccelDebug("DISC M2C sel=2 caps 600B name=%s", gMyAccelName);
             return kIOReturnSuccess;
         }
-        case 10: { /* WindowServer dirtyRing 24B — non-Metal path */
-            if (!arguments->structureOutput || arguments->structureOutputSize < 24)
-                return kIOReturnBadArgument;
-            if (!fDirtyRingMD) {
-                fDirtyRingMD = IOBufferMemoryDescriptor::withOptions(kIODirectionInOut | kIOMemoryBufferPageable, 4096, PAGE_SIZE);
-                if (!fDirtyRingMD) return kIOReturnNoMemory;
-                if (fDirtyRingMD->prepare() != kIOReturnSuccess) { fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
-                fDirtyRingMap = fDirtyRingMD->createMappingInTask(fClientTask, 0, kIOMapAnywhere);
-                if (!fDirtyRingMap) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; return kIOReturnNoMemory; }
-                fDirtyRingUserVA = fDirtyRingMap->getVirtualAddress();
-                IOMemoryMap *kernMap = fDirtyRingMD->map(kIOMapInhibitCache);
-                if (kernMap) {
-                    void *kernVA = (void *)kernMap->getVirtualAddress();
-                    bzero(kernVA, 4096);
-                    *(uint32_t*)((uint8_t*)kernVA + 4) = 64;
-                    kernMap->release();
-                }
-                IOLog("MyIntelAccelerator::[dirtyRing] allocated userVA=0x%llx cap=64 (type5)\n", fDirtyRingUserVA);
-            }
-            uint64_t *out = (uint64_t *)arguments->structureOutput;
-            out[0] = fDirtyRingUserVA;
-            out[1] = 0;
-            out[2] = 0;
-            arguments->structureOutputSize = 24;
-            IOLog("MyIntelAccelerator::[dirtyRing] type5 sel10 return va=0x%llx 24B\n", fDirtyRingUserVA);
-            return kIOReturnSuccess;
-        }
         default:
             AccelDebug("DISC M2C sel=%u in=%u out=%u stIn=%lu stOut=%lu -> SUCCESS",
                        (unsigned int)selector,
@@ -393,6 +333,10 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
                        (unsigned long)arguments->structureOutputSize);
             return kIOReturnSuccess;
         }
+    }
+
+    if (fClientType != kMyIntelAccelInfoClientType) {
+        return kIOReturnUnsupported;
     }
 
     /* Mission C Phase 1: log-only — responses below must stay unchanged (crash oracle) */
@@ -603,12 +547,15 @@ IOReturn MyIntelAccelClient::sGetInfo(MyIntelAccelClient *client,
     if (!client || !client->fAccel) {
         return kIOReturnNotReady;
     }
+    if (!output) {
+        return kIOReturnBadArgument;
+    }
     if (outputCount < sizeof(MyIntelAccelInfo) / sizeof(uint64_t)) {
         return kIOReturnOverrun;
     }
 
     MyIntelAccelInfo info = {};
-    info.accelID       = client->fAccel->getAccelID();
+    info.accelID       = (uint32_t)client->fAccel->getAccelID();
 
     MyIntelGPU *gpu = client->fAccel->getGPU();
     if (gpu) {
@@ -616,7 +563,6 @@ IOReturn MyIntelAccelClient::sGetInfo(MyIntelAccelClient *client,
         info.gttTotalPages = gpu->getGttTotal();
     }
 
-    output[0] = 0;
     memcpy(output, &info, sizeof(info));
     return kIOReturnSuccess;
 }
@@ -657,6 +603,27 @@ MyIntelAccelerator::surfaceFindOrCreate(uint32_t sid)
     e->bytes = 0;
     if (fSurfaceLock) IOLockUnlock(fSurfaceLock);
     return e;
+}
+
+void MyIntelAccelerator::surfaceReleaseByID(uint32_t sid)
+{
+    if (!fGPU || !sid) return;
+
+    if (fSurfaceLock) IOLockLock(fSurfaceLock);
+    uint32_t *gsm = (uint32_t *)fGPU->getGsm();
+
+    for (int i = 0; i < kMaxSurfaces; i++) {
+        if (fSurfaces[i].sid == sid && fSurfaces[i].backing) {
+            IOLog("MyIntelAccelerator: Releasing sid=%u\n", sid);
+            gemBufferDestroy(fSurfaces[i].backing, gsm, &MyIntelGPU::ggttInvalidateTrampoline, fGPU);
+            fSurfaces[i].backing = NULL;
+            fSurfaces[i].sid = 0;
+            fSurfaces[i].bytes = 0;
+            break; // เจอแล้วลบแล้วออกได้เลย
+        }
+    }
+
+    if (fSurfaceLock) IOLockUnlock(fSurfaceLock);
 }
 
 void MyIntelAccelerator::surfaceReleaseAll(void)

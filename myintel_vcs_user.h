@@ -36,7 +36,7 @@ extern "C" {
  */
 enum {
     kMyVCSSubmitCommandBuffer = 0,  /* in: ggtt, dwords, codec            */
-    kMyVCSWaitForCompletion   = 1,  /* in: timeoutMs   out: status        */
+    kMyVCSWaitForCompletion   = 1,  /* in: timeoutMs; wait for VCS0 ring drain */
     kMyVCSGetVCSStatus        = 2,  /* out: VCS_CTL register value        */
     kMyVCSMapOutputBuffer     = 3,  /* in: ggtt, size  out: mapping idx   */
     kMyVCSUnmapOutputBuffer   = 4,  /* in: mapping idx                    */
@@ -55,8 +55,15 @@ enum {
     kMyVCSEngineDiag          = 11, /* out: esr, ipehr, lrcHead, lrcTail, csbWr, csb0lo,
                                      *      hwspScratch, execStLo, nopid, mmioHead, mmioTail, ctl */
 
-    /* 2.0.260: map external physical address (IOSurface) into PPGTT */
-    kMyVCSMapExternalPhys    = 12, /* in: physLow, physHigh, size | out: success */
+    /* 2.0.260: map a caller-owned virtual range (e.g. an IOSurface's base
+     * address) into GGTT + VCS ring PPGTT. The range is resolved inside the
+     * CALLING task via IOMemoryDescriptor::withAddressRange(), so a client can
+     * only map memory it already owns — never arbitrary physical memory. Pages
+     * are bound into GGTT (VDBOX/HCP dwords carry GGTT offsets) and
+     * identity-mapped into the ring PPGTT at that same offset.
+     * out: ggttOffset (0 = fail). Pair every success with a close() to unbind
+     * (the client unbinds all live slots in clientClose()). */
+    kMyVCSMapExternalPhys    = 12, /* in: userVA, size | out: ggttOffset */
 
     /* 2.0.261: Get VideoToolbox decoder configuration */
     kMyVCSGetDecoderConfig   = 13, /* out: decoder config struct for VTRegisterSupplementalVideoDecoderIfAvailable */
@@ -69,6 +76,13 @@ enum {
 
     /* Set GuC firmware GGTT offset for DMA load (loads GuC before HuC on Gen12) */
     kMyVCSSetGuCFirmware     = 16, /* in: handle (GEM), size (bytes) */
+
+    /* VCS2 has independent submission, recovery, and diagnostic state. */
+    kMyVCSSubmitVCS2Workload = 17, /* structIn: raw MFX/HCP dwords */
+    kMyVCSEngineResetVCS2    = 18, /* out: same layout as kMyVCSEngineReset */
+    kMyVCSEngineDiagVCS2     = 19, /* out: same layout as kMyVCSEngineDiag */
+    kMyVCSGetContextInfoVCS2 = 20, /* out: MMIO base, ring GGTT, size */
+    kMyVCSWaitForCompletionVCS2 = 21, /* in: timeoutMs out: LRC ring head */
 };
 
 /*

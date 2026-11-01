@@ -72,8 +72,10 @@
  * paired SFC together with VCS engines -> include SFC0(bit17). */
 #define GEN6_GDRST_REG_OFFSET       0x941C
 #define GEN11_GRDOM_MEDIA           (1u << 5)
+#define GEN11_GRDOM_MEDIA3          (1u << 7)
 #define GEN11_GRDOM_SFC0            (1u << 17)
 #define VCS0_GDRST_DOMAIN           (GEN11_GRDOM_MEDIA | GEN11_GRDOM_SFC0)
+#define VCS2_GDRST_DOMAIN           GEN11_GRDOM_MEDIA3
 #define RING_ESR_OFFSET             0xB8
 #define RING_HWS_PGA_OFFSET         0x80    /* Hardware Status Page */
 #define RING_HWS_STAM_OFFSET        0x98    /* Interrupt Mask for Status Page */
@@ -277,6 +279,7 @@ typedef enum {
 struct MyIntelRing {
     /* Engine Info */
     MyIntelEngineType engineType;   /* RCS / BCS */
+    uint8_t           engineInstance; /* Hardware engine instance in execlist descriptor */
     uint32_t          mmioBase;     /* Engine MMIO base offset (e.g. 0x02000) */
 
     /* Ring Buffer (backed by GGTT page) */
@@ -323,6 +326,7 @@ struct MyIntelRing {
         uint32_t          ggtt;        /* Batch GGTT offset for BB_START (0 = none) */
         uint32_t          taskType;    /* Client task type (kMyIntelTaskType_*) */
         uint64_t          packetData;  /* Client packet data (task payload) */
+        uint32_t          seqno;       /* In-flight completion seqno (0 = none) */
     };
     PendingBatch      pendingQueue[RING_PENDING_MAX];
     uint32_t          pendingHead;    /* index of next entry to drain */
@@ -734,13 +738,15 @@ struct MyIntelRingCallbacks {
  * @param mmioBase    Engine MMIO base (0x02000 for RCS, 0x22000 for BCS)
  * @param ringSize    Ring buffer size (RING_DEFAULT_SIZE = 16KB)
  * @param cb          Callbacks struct for MMIO + GEM access
+ * @param engineInstance  Hardware instance encoded in Gen11+ execlist descriptors
  * @return MyIntelRing* NULL failed
  */
 MyIntelRing *ringCreate(
     MyIntelEngineType    engineType,
     uint32_t             mmioBase,
     uint32_t             ringSize,
-    MyIntelRingCallbacks *cb);
+    MyIntelRingCallbacks *cb,
+    uint8_t              engineInstance = 0);
 
 /*!
  * @brief  Destroy ring — stop + clear registers + free buffer
@@ -1022,6 +1028,18 @@ bool lrcMapBatchPages(MyIntelRing *ring, uint32_t batchGGTT,
  * @return true = success
  */
 bool ringEmitBatchStart(MyIntelRing *ring, uint32_t va);
+
+/*!
+ * @brief  Emit MI_BATCH_BUFFER_START plus an optional completion seqno store.
+ *         The store runs in the ring after the batch returns, so generic
+ *         batches can retire through the same HWSP seqno as breadcrumbs.
+ *
+ * @param ring   Ring object
+ * @param va     Batch PPGTT VA (= GGTT offset in identity map)
+ * @param seqno  Completion seqno; 0 emits BB_START only
+ * @return true = success
+ */
+bool ringEmitBatchStartSeqno(MyIntelRing *ring, uint32_t va, uint32_t seqno);
 
 /*!
  * @brief  Build XCS (VCS/VECS/BCS/CCS) context at a specific LRC page offset.
