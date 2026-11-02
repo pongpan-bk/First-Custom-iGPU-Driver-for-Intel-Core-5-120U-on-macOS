@@ -1,3 +1,5 @@
+"As long as you view macOS as Unix, you will only get what you've always got. I view macOS as Linux, and that's why I get what you see."
+
 <img width="1920" height="1080" alt="Screenshot 2569-11-02 at 5 32 57 PM" src="https://github.com/user-attachments/assets/a070a163-16f7-4861-9894-cf361eb4cc74" />
 <img width="1920" height="1080" alt="Screenshot 2569-11-02 at 2 54 39 PM" src="https://github.com/user-attachments/assets/d9e2b294-c212-4069-9b6b-522bc7d1e252" />
 
