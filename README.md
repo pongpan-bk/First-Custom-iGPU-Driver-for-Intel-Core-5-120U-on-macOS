@@ -1,3 +1,7 @@
+<img width="1920" height="1080" alt="Screenshot 2569-11-02 at 6 21 58 AM" src="https://github.com/user-attachments/assets/fb1c517e-472f-4d2c-a7b8-b0b685512576" />
+
+
+
 <div align="center">
 
 # ⚡ MYINTELGPU — HONEST IDENTITY DRIVER
