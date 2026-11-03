@@ -281,6 +281,11 @@ bool vcsLoadHuCFirmware(MyIntelGPU *gpu, void *ctx,
  *   bool vcsLoadGuCFirmware(MyIntelGPU *gpu, uint32_t ggttOff, uint32_t fwSize) */
 bool vcsLoadGuCFirmware(MyIntelGPU *gpu, uint32_t ggttOff, uint32_t fwSize);
 
+/* Authenticate the HuC image already in WOPCM. Must be called after the GuC
+ * is READY; sends INTEL_GUC_ACTION_AUTHENTICATE_HUC via the MMIO HXG channel
+ * with the GGTT offset of the RSA signature (fwGgttOffset + upload_size). */
+bool vcsAuthenticateHuC(MyIntelGPU *gpu);
+
 /* Submit decode command to VCS ring */
 bool vcsSubmitDecodeCommand(void *ring, void *callbacks,
                            const uint32_t *commands, uint32_t size);

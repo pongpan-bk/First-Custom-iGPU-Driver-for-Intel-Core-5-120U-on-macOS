@@ -157,6 +157,23 @@ bool vcsCmdVeboxPictureStart(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t hei
 bool vcsCmdVeboxSliceData(MyIntelVCSCmdBuf *buf, uint32_t sliceAddr, uint32_t sliceSize);
 bool vcsCmdVeboxPictureEnd(MyIntelVCSCmdBuf *buf);
 
+bool vcsCmdAv1PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode);
+bool vcsCmdAv1PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height);
+bool vcsCmdAv1TileState(MyIntelVCSCmdBuf *buf, uint32_t numTilesX, uint32_t numTilesY);
+bool vcsCmdAv1BsdObject(MyIntelVCSCmdBuf *buf, uint32_t sliceOffset, uint32_t sliceSize);
+
+bool vcsCmdVp9PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode);
+bool vcsCmdVp9SurfaceState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
+                          uint32_t format, uint32_t ggttOffset, bool linear);
+bool vcsCmdVp9PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
+                       uint32_t picParamGgtt);
+bool vcsCmdVp9SliceState(MyIntelVCSCmdBuf *buf, uint32_t sliceCount);
+
+bool vcsCmdMpeg2PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode);
+bool vcsCmdMpeg2PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height);
+bool vcsCmdVc1PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode);
+bool vcsCmdVc1PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height);
+
 /*
  * ─── Phase 10 — Gen12-accurate MFX AVC decode sequence ───────────
  *  อ้างอิง layout จริงจาก mhw_vdbox_mfx_hwcmd_g12_X.h (Intel media-driver)
@@ -203,6 +220,7 @@ bool vcsCmdG12AvcImgState(MyIntelVCSCmdBuf *buf,
                            int32_t  chromaQpIndexOffset, int32_t  secondChromaQpIndexOffset);
 bool vcsCmdG12AvcPicIdState(MyIntelVCSCmdBuf *buf);
 bool vcsCmdG12AvcRefIdxDummy(MyIntelVCSCmdBuf *buf);
+bool vcsCmdG12AvcRefIdxList(MyIntelVCSCmdBuf *buf, uint32_t list, uint32_t frameStoreID);
 bool vcsCmdG12AvcSliceState(MyIntelVCSCmdBuf *buf, uint32_t sliceType,
                             uint32_t startMb, uint32_t widthMb,
                             uint32_t heightMb,

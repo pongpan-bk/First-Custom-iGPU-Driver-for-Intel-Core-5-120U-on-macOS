@@ -976,6 +976,24 @@ bool vcsCmdG12AvcRefIdxDummy(MyIntelVCSCmdBuf *buf)
     return vcsCmdEmitBatch(buf, d, 10);
 }
 
+/* MFX_AVC_REF_IDX_STATE — one valid entry per list. 32 entries x 1 byte:
+ * bit0 bottomField, bits1-4 frameStoreID, bit5 fieldPic, bit6 longTerm,
+ * bit7 nonExisting. Unused entries = 0x80.
+ * Required for P/B slices; omitting it makes the hardware treat every
+ * inter edge as a different reference (bS=1), over-filtering the picture. */
+bool vcsCmdG12AvcRefIdxList(MyIntelVCSCmdBuf *buf, uint32_t list,
+                            uint32_t frameStoreID)
+{
+    uint32_t d[10];
+    memset(d, 0, sizeof(d));
+    d[0] = 0x71040008;
+    d[1] = list & 1u;
+    uint8_t *e = (uint8_t *)&d[2];
+    for (int i = 0; i < 32; i++) e[i] = 0x80;
+    e[0] = (uint8_t)((frameStoreID & 0xFu) << 1);
+    return vcsCmdEmitBatch(buf, d, 10);
+}
+
 bool vcsCmdG12AvcSliceState(MyIntelVCSCmdBuf *buf, uint32_t sliceType,
                             uint32_t startMb, uint32_t widthMb,
                             uint32_t heightMb,
@@ -1127,4 +1145,105 @@ bool vcsCmdFlushMedia(MyIntelVCSCmdBuf *buf)
 bool vcsCmdWaitMedia(MyIntelVCSCmdBuf *buf)
 {
     return vcsCmdEmit(buf, 0x15000001);  /* MFX_WAIT | EN */
+}
+
+#define VEBOX_BRINGUP_CMD  0x30000001u
+
+bool vcsCmdVeboxInit(MyIntelVCSCmdBuf *buf)
+{
+    uint32_t d[2] = { VEBOX_BRINGUP_CMD, 0x00000000u };
+    return vcsCmdEmitBatch(buf, d, 2);
+}
+
+bool vcsCmdVeboxPictureStart(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
+                              uint32_t format, uint32_t veboxIndex)
+{
+    uint32_t d[4] = { VEBOX_BRINGUP_CMD | 0x1u, width, height, (format << 16) | veboxIndex };
+    return vcsCmdEmitBatch(buf, d, 4);
+}
+
+bool vcsCmdVeboxSliceData(MyIntelVCSCmdBuf *buf, uint32_t sliceAddr, uint32_t sliceSize)
+{
+    uint32_t d[3] = { VEBOX_BRINGUP_CMD | 0x2u, sliceAddr, sliceSize };
+    return vcsCmdEmitBatch(buf, d, 3);
+}
+
+bool vcsCmdVeboxPictureEnd(MyIntelVCSCmdBuf *buf)
+{
+    uint32_t d[2] = { VEBOX_BRINGUP_CMD | 0x3u, 0x00000000u };
+    return vcsCmdEmitBatch(buf, d, 2);
+}
+
+#define AV1_BRINGUP_CMD  0x72000000u
+
+bool vcsCmdAv1PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode)
+{
+    uint32_t d[3] = { AV1_BRINGUP_CMD | 0x0u, 12u, decode ? 1u : 0u };
+    return vcsCmdEmitBatch(buf, d, 3);
+}
+
+bool vcsCmdAv1PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height)
+{
+    uint32_t d[4] = { AV1_BRINGUP_CMD | 0x1u, width, height, 0u };
+    return vcsCmdEmitBatch(buf, d, 4);
+}
+
+bool vcsCmdAv1TileState(MyIntelVCSCmdBuf *buf, uint32_t numTilesX, uint32_t numTilesY)
+{
+    uint32_t d[3] = { AV1_BRINGUP_CMD | 0x2u, numTilesX, numTilesY };
+    return vcsCmdEmitBatch(buf, d, 3);
+}
+
+bool vcsCmdAv1BsdObject(MyIntelVCSCmdBuf *buf, uint32_t sliceOffset, uint32_t sliceSize)
+{
+    uint32_t d[4] = { AV1_BRINGUP_CMD | 0x3u, sliceOffset, sliceSize, 0u };
+    return vcsCmdEmitBatch(buf, d, 4);
+}
+
+bool vcsCmdVp9PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode)
+{
+    return vcsCmdG12HcpPipeModeSelect(buf, decode);
+}
+
+bool vcsCmdVp9SurfaceState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
+                          uint32_t format, uint32_t ggttOffset, bool linear)
+{
+    return vcsCmdG12HcpSurfaceState(buf, width, height, format, ggttOffset, linear);
+}
+
+bool vcsCmdVp9PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
+                       uint32_t picParamGgtt)
+{
+    return vcsCmdG12HcpPicState(buf, width, height, picParamGgtt);
+}
+
+bool vcsCmdVp9SliceState(MyIntelVCSCmdBuf *buf, uint32_t sliceCount)
+{
+    return vcsCmdG12HcpSliceState(buf, sliceCount);
+}
+
+#define LEGACY_BRINGUP_CMD 0x6A000000u
+
+bool vcsCmdMpeg2PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode)
+{
+    uint32_t d[3] = { MFX_PIPE_MODE_SELECT_CMD, 0u, (decode ? (1u << 16) : 0u) | 2u };
+    return vcsCmdEmitBatch(buf, d, 3);
+}
+
+bool vcsCmdMpeg2PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height)
+{
+    uint32_t d[4] = { LEGACY_BRINGUP_CMD | 0x0u, width, height, 0u };
+    return vcsCmdEmitBatch(buf, d, 4);
+}
+
+bool vcsCmdVc1PipeModeSelect(MyIntelVCSCmdBuf *buf, bool decode)
+{
+    uint32_t d[3] = { MFX_PIPE_MODE_SELECT_CMD, 0u, (decode ? (1u << 16) : 0u) | 3u };
+    return vcsCmdEmitBatch(buf, d, 3);
+}
+
+bool vcsCmdVc1PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height)
+{
+    uint32_t d[4] = { LEGACY_BRINGUP_CMD | 0x1u, width, height, 0u };
+    return vcsCmdEmitBatch(buf, d, 4);
 }

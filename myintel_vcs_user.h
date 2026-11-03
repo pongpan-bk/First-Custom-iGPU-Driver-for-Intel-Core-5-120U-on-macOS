@@ -83,7 +83,55 @@ enum {
     kMyVCSEngineDiagVCS2     = 19, /* out: same layout as kMyVCSEngineDiag */
     kMyVCSGetContextInfoVCS2 = 20, /* out: MMIO base, ring GGTT, size */
     kMyVCSWaitForCompletionVCS2 = 21, /* in: timeoutMs out: LRC ring head */
+
+    /* Phase A: kext-side media session contract (no VideoToolbox glue yet)
+     *
+     * Begin (22)
+     *   in  scalars: [0]=codec (MYVCS_CODEC_*), [1]=width, [2]=height,
+     *                [3]=format (MYVCS_SURF_FMT_*)
+     *   out scalars: [0]=sessionId (1..MYVCS_SESSION_MAX, 0 = none free)
+     *   width/height must be multiples of 16, 16..8192.
+     *
+     * Submit (23)
+     *   in  scalars: [0]=sessionId, [1]=srcHandle, [2]=dstHandle,
+     *                [3]=reserved(0)
+     *   src/dst handles are informational (GEM handle or any caller cookie);
+     *   they are not dereferenced or validated by the kernel.
+     *   structureInput: raw MFX/HCP dwords — same rules as selector 6
+     *                   (>0 bytes, 16-byte aligned)
+     *   out scalars: [0]=fence (monotonic per client connection, starts at 1)
+     *   Fence semantics: fence n means "all submissions up to and including n
+     *   on this connection are complete". The VCS0 ring is a single ordered
+     *   stream, so waiting on any fence <= the latest drains the ring.
+     *
+     * Wait (24)
+     *   in  scalars: [0]=sessionId, [1]=fence (must be <= last fence issued by
+     *                this session, else kIOReturnBadArgument),
+     *                [2]=timeoutMs (0 = poll once, no wait)
+     *   out scalars: [0]=status (MYVCS_SESSION_DONE / MYVCS_SESSION_TIMEOUT),
+     *                [1]=lrcHead (LRC image ring head, masked to ring size)
+     *
+     * End (25)
+     *   in  scalars: [0]=sessionId
+     *   out: none. Session slot is released; GEM buffers stay caller-owned.
+     *
+     * All four selectors are VCS0-only. Sessions do not change GEM buffer or
+     * submission semantics; they add lifecycle + fencing on top of selector 6.
+     */
+    kMyVCSMediaSessionBegin  = 22,
+    kMyVCSMediaSessionSubmit = 23,
+    kMyVCSMediaSessionWait   = 24,
+    kMyVCSMediaSessionEnd    = 25,
 };
+
+/* Codec identifiers for kMyVCSMediaSessionBegin */
+#define MYVCS_CODEC_H264      1
+#define MYVCS_CODEC_HEVC      2
+/* 3 reserved (VP9) — not accepted until a validated decode path exists */
+
+#define MYVCS_SESSION_MAX     8
+#define MYVCS_SESSION_DONE    0
+#define MYVCS_SESSION_TIMEOUT 1
 
 /*
  * ─────────────────────────────────────────────

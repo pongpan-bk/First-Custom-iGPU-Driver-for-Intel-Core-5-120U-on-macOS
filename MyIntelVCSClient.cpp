@@ -69,6 +69,8 @@ bool MyIntelVCSClient::initWithTask(task_t owningTask, void *securityToken,
     memset(&sOutputMappings, 0, sizeof(sOutputMappings));
     memset(fGemSlots, 0, sizeof(fGemSlots));
     memset(fExtSlots, 0, sizeof(fExtSlots));
+    memset(fSessions, 0, sizeof(fSessions));
+    fFenceSerial = 0;
 
     IODebug("initWithTask: OK");
     return true;
@@ -119,6 +121,7 @@ void MyIntelVCSClient::free()
     IODebug("free");
     freeAllGemBuffers();
     freeAllExternalMappings();
+    memset(fSessions, 0, sizeof(fSessions));
     if (fProvider) {
         fProvider->release();   /* v3.3.4: match the retain() in start() */
         fProvider = NULL;
@@ -131,6 +134,7 @@ IOReturn MyIntelVCSClient::clientClose(void)
     IODebug("clientClose");
     freeAllGemBuffers();
     freeAllExternalMappings();
+    memset(fSessions, 0, sizeof(fSessions));
     terminate();
     return kIOReturnSuccess;
 }
@@ -179,6 +183,14 @@ static const IOExternalMethodDispatch sVCSMethodTable[] = {
     { MyIntelVCSClient::engineDiagVCS2, 0, 0, 12, 0 },
     { MyIntelVCSClient::getContextInfoVCS2, 0, 0, 3, 0 },
     { MyIntelVCSClient::waitForCompletionVCS2, 1, 0, 1, 0 },
+    /* kMyVCSMediaSessionBegin */
+    { MyIntelVCSClient::sessionBegin, 4, 0, 1, 0 },
+    /* kMyVCSMediaSessionSubmit — scalars carry ids, structure carries dwords */
+    { MyIntelVCSClient::sessionSubmit, 4, kIOUCVariableStructureSize, 1, 0 },
+    /* kMyVCSMediaSessionWait */
+    { MyIntelVCSClient::sessionWait, 3, 0, 2, 0 },
+    /* kMyVCSMediaSessionEnd */
+    { MyIntelVCSClient::sessionEnd, 1, 0, 0, 0 },
 };
 
 IOReturn MyIntelVCSClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
@@ -339,6 +351,34 @@ IOReturn MyIntelVCSClient::waitForCompletionVCS2(OSObject *target, void *referen
     return self->waitForRingCompletion(args, self->fProvider->getVCS2Ring());
 }
 
+IOReturn MyIntelVCSClient::waitRingDrain(MyIntelRing *ring, uint32_t timeoutMs,
+                                         uint32_t *outHead)
+{
+    if (!ring || !ringIsInitialized(ring)) {
+        return kIOReturnNotReady;
+    }
+    if (!ring->lrcInited || !ring->lrcVaddr) {
+        return kIOReturnNotReady;
+    }
+
+    volatile uint32_t *lrcState =
+        (volatile uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
+    uint32_t tail = ring->tail & (ring->size - 1);
+    uint32_t elapsed = 0;
+    uint32_t head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
+
+    while (head != tail && elapsed < timeoutMs) {
+        IODelay(1000);
+        elapsed++;
+        head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
+    }
+
+    if (outHead) {
+        *outHead = head;
+    }
+    return (head == tail) ? kIOReturnSuccess : kIOReturnTimeout;
+}
+
 IOReturn MyIntelVCSClient::waitForRingCompletion(IOExternalMethodArguments *args,
                                                  MyIntelRing *ring)
 {
@@ -349,25 +389,15 @@ IOReturn MyIntelVCSClient::waitForRingCompletion(IOExternalMethodArguments *args
         return kIOReturnNotReady;
     }
 
-    volatile uint32_t *lrcState =
-        (volatile uint32_t *)((uint8_t *)ring->lrcVaddr + LRC_STATE_OFFSET);
-    uint32_t tail = ring->tail & (ring->size - 1);
     uint32_t timeoutMs = (args->scalarInputCount > 0) ? (uint32_t)args->scalarInput[0] : 5000;
-    uint32_t elapsed = 0;
-    uint32_t head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
-
-    while (head != tail && elapsed < timeoutMs) {
-        IODelay(1000);
-        elapsed++;
-        head = lrcState[CTX_RING_HEAD] & (ring->size - 1);
-    }
+    uint32_t head = 0;
+    IOReturn kr = waitRingDrain(ring, timeoutMs, &head);
 
     if (args->scalarOutputCount > 0) {
         args->scalarOutput[0] = head;
         args->scalarOutputCount = 1;
     }
-
-    return (head == tail) ? kIOReturnSuccess : kIOReturnTimeout;
+    return kr;
 }
 
 /*
@@ -502,17 +532,27 @@ IOReturn MyIntelVCSClient::submitVCS2Workload(OSObject *target, void *reference,
 IOReturn MyIntelVCSClient::submitVCSWorkloadToRing(IOExternalMethodArguments *args,
                                                    MyIntelRing *ring)
 {
+    const uint32_t *userCmds = (const uint32_t *)args->structureInput;
+    size_t cmdSizeByte = args ? args->structureInputSize : 0;
+
+    if (!args || !userCmds || cmdSizeByte == 0 || (cmdSizeByte % 16) != 0) {
+        IODebug("submitVCSWorkload: REJECTED — cmds=%p size=%zu (must be >0, 16-byte aligned)",
+                userCmds, cmdSizeByte);
+        return kIOReturnBadArgument;
+    }
+    return submitDwordsToRing(userCmds, cmdSizeByte, ring);
+}
+
+IOReturn MyIntelVCSClient::submitDwordsToRing(const void *userCmds, size_t cmdSizeByte,
+                                              MyIntelRing *ring)
+{
     MyIntelVCSClient *self = this;
-    if (!self->fProvider || !args) {
+    if (!self->fProvider) {
         return kIOReturnNotReady;
     }
 
-    const uint32_t *userCmds = (const uint32_t *)args->structureInput;
-    size_t cmdSizeByte = args->structureInputSize;
-
-    if (!userCmds || cmdSizeByte == 0 || (cmdSizeByte % 16) != 0) {
-        IODebug("submitVCSWorkload: REJECTED — cmds=%p size=%zu (must be >0, 16-byte aligned)",
-                userCmds, cmdSizeByte);
+    const uint32_t *cmds = (const uint32_t *)userCmds;
+    if (!cmds || cmdSizeByte == 0 || (cmdSizeByte % 16) != 0) {
         return kIOReturnBadArgument;
     }
 
@@ -538,6 +578,22 @@ IOReturn MyIntelVCSClient::submitVCSWorkloadToRing(IOExternalMethodArguments *ar
         return kIOReturnTimeout;
     }
 
+    /* HuC DMA must run BEFORE the GuC boot: once the GuC owns WOPCM the
+     * CPU-side HuC DMA is silently dropped. i915 loads HuC first, then GuC,
+     * then authenticates HuC via a GuC action. */
+    if (!self->fProvider->fHuCDmad) {
+        if (self->fProvider->getFwGgttOffset() != 0 && self->fProvider->getFwSize() != 0) {
+            bool hucDma = vcsLoadHuCFirmware(self->fProvider, NULL,
+                                             NULL, self->fProvider->getFwSize());
+            self->fProvider->fHuCDmad = hucDma;
+            IODebug("submitVCSWorkload(%s): HuC DMA %s",
+                    engineName, hucDma ? "SUCCESS" : "FAILED");
+        } else {
+            IODebug("submitVCSWorkload(%s): HuC firmware not set (fwGgttOffset=0), skipping DMA",
+                    engineName);
+        }
+    }
+
     /* Lazy GuC firmware load: on Gen12 the GuC (not the VCR) is the HuC
      * loading agent, so GuC must be running before HuC can authenticate.
      * Client must have called setGuCFirmware() before first HEVC decode. */
@@ -556,20 +612,12 @@ IOReturn MyIntelVCSClient::submitVCSWorkloadToRing(IOExternalMethodArguments *ar
         }
     }
 
-    /* Lazy HuC firmware load: load firmware on first submit if not already loaded.
-     * Client must have called setHuCFirmware() before first HEVC decode. */
-    if (!self->fProvider->fHuCLoaded) {
-        if (self->fProvider->getFwGgttOffset() != 0 && self->fProvider->getFwSize() != 0) {
-            bool hucLoaded = vcsLoadHuCFirmware(self->fProvider, NULL,
-                                                NULL, self->fProvider->getFwSize());
-            self->fProvider->fHuCLoaded = hucLoaded;
-            IODebug("submitVCSWorkload(%s): lazy HuC firmware load %s",
-                    engineName,
-                    hucLoaded ? "SUCCESS" : "FAILED");
-        } else {
-            IODebug("submitVCSWorkload(%s): HuC firmware not set (fwGgttOffset=0), skipping load",
-                    engineName);
-        }
+    /* HuC authentication: HuC image must be in WOPCM and GuC READY. */
+    if (!self->fProvider->fHuCLoaded && self->fProvider->fHuCDmad && self->fProvider->fGuCLoaded) {
+        bool hucAuth = vcsAuthenticateHuC(self->fProvider);
+        self->fProvider->fHuCLoaded = hucAuth;
+        IODebug("submitVCSWorkload(%s): HuC authenticate %s",
+                engineName, hucAuth ? "SUCCESS" : "FAILED");
     }
 
     /* ── PPGTT identity map: map EVERY client GEM buffer into the VCS
@@ -615,7 +663,7 @@ IOReturn MyIntelVCSClient::submitVCSWorkloadToRing(IOExternalMethodArguments *ar
         return kIOReturnNoMemory;
     }
 
-    memcpy(cs, userCmds, cmdSizeByte);
+    memcpy(cs, cmds, cmdSizeByte);
     ringAdvance(ring, cs + dwordCount);
     ringSubmit(ring, self->fProvider->getRingCallbacks());
 
@@ -1494,5 +1542,157 @@ IOReturn MyIntelVCSClient::getDecoderConfig(OSObject *target, void *reference,
     args->scalarOutputCount = 11;
 
     IODebug("getDecoderConfig: returned config for H264/HEVC/VP9/AV1");
+    return kIOReturnSuccess;
+}
+
+/* Phase A — media session contract (selectors 22-25), VCS0 only */
+IOReturn MyIntelVCSClient::sessionBegin(OSObject *target, void *reference,
+                                        IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider) {
+        return kIOReturnNotReady;
+    }
+    if (!args || args->scalarInputCount < 4) {
+        return kIOReturnBadArgument;
+    }
+
+    uint32_t codec  = (uint32_t)args->scalarInput[0];
+    uint32_t width  = (uint32_t)args->scalarInput[1];
+    uint32_t height = (uint32_t)args->scalarInput[2];
+    uint32_t format = (uint32_t)args->scalarInput[3];
+
+    if (codec != MYVCS_CODEC_H264 && codec != MYVCS_CODEC_HEVC) {
+        return kIOReturnBadArgument;
+    }
+    if (width < 16 || height < 16 || width > 8192 || height > 8192 ||
+        (width % 16) != 0 || (height % 16) != 0) {
+        return kIOReturnBadArgument;
+    }
+    if (format != MYVCS_SURF_FMT_NV12 && format != MYVCS_SURF_FMT_P010) {
+        return kIOReturnBadArgument;
+    }
+
+    for (int i = 0; i < VCS_SESSION_MAX; i++) {
+        if (self->fSessions[i].active) {
+            continue;
+        }
+        VCSMediaSession *s = &self->fSessions[i];
+        s->active = true;
+        s->codec  = codec;
+        s->width  = width;
+        s->height = height;
+        s->format = format;
+        s->fence  = 0;
+        args->scalarOutput[0] = (uint64_t)(i + 1);
+        args->scalarOutputCount = 1;
+        IODebug("sessionBegin: id=%d codec=%u %ux%u fmt=%u", i + 1, codec, width, height, format);
+        return kIOReturnSuccess;
+    }
+    return kIOReturnNoSpace;
+}
+
+IOReturn MyIntelVCSClient::sessionSubmit(OSObject *target, void *reference,
+                                         IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider) {
+        return kIOReturnNotReady;
+    }
+    if (!args || args->scalarInputCount < 4) {
+        return kIOReturnBadArgument;
+    }
+
+    uint32_t sessionId = (uint32_t)args->scalarInput[0];
+    uint32_t srcHandle = (uint32_t)args->scalarInput[1];
+    uint32_t dstHandle = (uint32_t)args->scalarInput[2];
+
+    if (sessionId < 1 || sessionId > VCS_SESSION_MAX) {
+        return kIOReturnBadArgument;
+    }
+    VCSMediaSession *s = &self->fSessions[sessionId - 1];
+    if (!s->active) {
+        return kIOReturnBadArgument;
+    }
+
+    /* src/dst handles are not dereferenced by the submission path (it copies
+     * caller dwords and identity-maps all GEM slots), so they are carried for
+     * future scheduling/accounting only — same trust model as selector 6. */
+    (void)srcHandle;
+    (void)dstHandle;
+
+    IOReturn kr = self->submitDwordsToRing(args->structureInput,
+                                           args->structureInputSize,
+                                           self->fProvider->getVCSRing());
+    if (kr != kIOReturnSuccess) {
+        return kr;
+    }
+
+    s->fence = ++self->fFenceSerial;
+    args->scalarOutput[0] = s->fence;
+    args->scalarOutputCount = 1;
+    return kIOReturnSuccess;
+}
+
+IOReturn MyIntelVCSClient::sessionWait(OSObject *target, void *reference,
+                                       IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self || !self->fProvider) {
+        return kIOReturnNotReady;
+    }
+    if (!args || args->scalarInputCount < 3) {
+        return kIOReturnBadArgument;
+    }
+
+    uint32_t sessionId = (uint32_t)args->scalarInput[0];
+    uint32_t fence     = (uint32_t)args->scalarInput[1];
+    uint32_t timeoutMs = (uint32_t)args->scalarInput[2];
+
+    if (sessionId < 1 || sessionId > VCS_SESSION_MAX) {
+        return kIOReturnBadArgument;
+    }
+    VCSMediaSession *s = &self->fSessions[sessionId - 1];
+    if (!s->active) {
+        return kIOReturnBadArgument;
+    }
+    if (fence == 0 || fence > s->fence) {
+        return kIOReturnBadArgument;
+    }
+
+    uint32_t head = 0;
+    IOReturn kr = self->waitRingDrain(self->fProvider->getVCSRing(), timeoutMs, &head);
+    if (kr == kIOReturnNotReady) {
+        return kr;
+    }
+
+    /* timeout is a result, not an error — the call itself was valid */
+    args->scalarOutput[0] = (kr == kIOReturnSuccess) ? MYVCS_SESSION_DONE
+                                                     : MYVCS_SESSION_TIMEOUT;
+    args->scalarOutput[1] = head;
+    args->scalarOutputCount = 2;
+    return kIOReturnSuccess;
+}
+
+IOReturn MyIntelVCSClient::sessionEnd(OSObject *target, void *reference,
+                                      IOExternalMethodArguments *args)
+{
+    MyIntelVCSClient *self = OSDynamicCast(MyIntelVCSClient, target);
+    if (!self) {
+        return kIOReturnNotReady;
+    }
+    if (!args || args->scalarInputCount < 1) {
+        return kIOReturnBadArgument;
+    }
+
+    uint32_t sessionId = (uint32_t)args->scalarInput[0];
+    if (sessionId < 1 || sessionId > VCS_SESSION_MAX) {
+        return kIOReturnBadArgument;
+    }
+    VCSMediaSession *s = &self->fSessions[sessionId - 1];
+    if (!s->active) {
+        return kIOReturnBadArgument;
+    }
+    memset(s, 0, sizeof(*s));
     return kIOReturnSuccess;
 }

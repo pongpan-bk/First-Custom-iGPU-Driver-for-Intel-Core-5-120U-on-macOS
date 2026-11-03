@@ -268,6 +268,9 @@ bool MyIntelGPU::init(OSDictionary *dict)
     fwGgttOffset  = 0;
     fwSize        = 0;
     fHuCLoaded    = false;
+    fHuCDmad      = false;
+    fWOPCMReady   = false;
+    fCtbBlob      = NULL;
     gucGgttOffset = 0;
     gucSize       = 0;
     fGuCLoaded    = false;
@@ -3920,6 +3923,27 @@ bool MyIntelGPU::_inIrqContext(void *context)
  *   4. Panel power on
  */
 
+/* Program the WOPCM partition once per boot. Both DMA loaders depend on it;
+ * writing the same constants again is idempotent, but only the first call
+ * needs to run. */
+static void wopcmInitForADLP(MyIntelGPU *gpu)
+{
+    if (gpu->isWopcmReady()) {
+        return;
+    }
+    gpu->writeReg32(GUC_WOPCM_SIZE_REG,
+                    (WOPCM_GUC_SIZE_ADLP & GUC_WOPCM_SIZE_MASK) | GUC_WOPCM_SIZE_LOCKED);
+    gpu->writeReg32(DMA_GUC_WOPCM_OFFSET_REG,
+                    (WOPCM_GUC_BASE_ADLP & GUC_WOPCM_OFFSET_MASK) |
+                    HUC_LOADING_AGENT_GUC | GUC_WOPCM_OFFSET_VALID);
+    uint32_t postWopcmSize = gpu->readReg32(GUC_WOPCM_SIZE_REG);
+    uint32_t postWopcmOff  = gpu->readReg32(DMA_GUC_WOPCM_OFFSET_REG);
+    IODebug("WOPCM init SIZE=0x%X (locked=%u) OFFSET=0x%X (valid=%u)",
+            postWopcmSize, (postWopcmSize & GUC_WOPCM_SIZE_LOCKED) ? 1u : 0u,
+            postWopcmOff, (postWopcmOff & GUC_WOPCM_OFFSET_VALID) ? 1u : 0u);
+    gpu->setWopcmReady();
+}
+
 /*
  * vcsLoadGuCFirmware — Load GuC firmware via WOPCM DMA engine
  *
@@ -3973,19 +3997,8 @@ bool vcsLoadGuCFirmware(MyIntelGPU *gpu, uint32_t ggttOff, uint32_t fwSize)
     bool success = false;
     do {
         /* uc_init_wopcm_regs(): lock WOPCM and publish the GuC base before the
-         * firmware DMA. i915 gt/uc/intel_uc.c does this once from the GuC path;
-         * without it the GuC bootrom never leaves reset (GUC_STATUS=0x1). The
-         * HuC loader inherits these values and must not rewrite them. */
-        gpu->writeReg32(GUC_WOPCM_SIZE_REG,
-                        (WOPCM_GUC_SIZE_ADLP & GUC_WOPCM_SIZE_MASK) | GUC_WOPCM_SIZE_LOCKED);
-        gpu->writeReg32(DMA_GUC_WOPCM_OFFSET_REG,
-                        (WOPCM_GUC_BASE_ADLP & GUC_WOPCM_OFFSET_MASK) |
-                        HUC_LOADING_AGENT_GUC | GUC_WOPCM_OFFSET_VALID);
-        uint32_t postWopcmSize = gpu->readReg32(GUC_WOPCM_SIZE_REG);
-        uint32_t postWopcmOff  = gpu->readReg32(DMA_GUC_WOPCM_OFFSET_REG);
-        IODebug("GuC Load: WOPCM init SIZE=0x%X (locked=%u) OFFSET=0x%X (valid=%u)",
-                postWopcmSize, (postWopcmSize & GUC_WOPCM_SIZE_LOCKED) ? 1u : 0u,
-                postWopcmOff, (postWopcmOff & GUC_WOPCM_OFFSET_VALID) ? 1u : 0u);
+         * firmware DMA. HuC DMA runs first and programs the same registers. */
+        wopcmInitForADLP(gpu);
 
         /* guc_prepare_xfer(): must run before the DMA. On IP < 12.55 (ADLP =
          * 12.50) i915 also sets SRAM_INIT_TO_ZEROES + MIA_CACHING; without
@@ -4124,6 +4137,10 @@ bool vcsLoadHuCFirmware(MyIntelGPU *gpu, void *ctx,
         IODebug("HuC Load: FAILED — forceWakeGet");
         return false;
     }
+    /* WOPCM partition must exist before the DMA. HuC DMA runs BEFORE the GuC
+     * boot (i915 "HuC must be loaded before GuC"): once GuC owns WOPCM the
+     * CPU's HuC DMA is silently dropped. */
+    wopcmInitForADLP(gpu);
 
     /* Pre-load engine state diagnostics (non-blocking). The VCR HuC load path
      * does not program GuC, so if the GuC/HuC block is unpowered these MMIO
@@ -4202,26 +4219,10 @@ bool vcsLoadHuCFirmware(MyIntelGPU *gpu, void *ctx,
             break;
         }
 
-        /* Verify load: HUC_LOAD_SUCCESSFUL in GEN11_HUC_KERNEL_LOAD_INFO (Gen11+).
-         * Legacy/non-GSC path may instead expose HUC_STATUS2.HUC_FW_VERIFIED. */
-        bool loaded = false;
-        for (int i = 0; i < 20; i++) {
-            uint32_t loadInfo = gpu->readReg32(GEN11_HUC_KERNEL_LOAD_INFO);
-            uint32_t status2  = gpu->readReg32(HUC_STATUS2);
-            if ((loadInfo & HUC_LOAD_SUCCESSFUL) || (status2 & HUC_FW_VERIFIED)) {
-                IODebug("HuC Load: VERIFIED (loadInfo=0x%X status2=0x%X)", loadInfo, status2);
-                loaded = true;
-                break;
-            }
-            IODelay(1000);
-        }
-        if (!loaded) {
-            uint32_t loadInfo = gpu->readReg32(GEN11_HUC_KERNEL_LOAD_INFO);
-            uint32_t status2  = gpu->readReg32(HUC_STATUS2);
-            IODebug("HuC Load: FAILED — not verified (loadInfo=0x%X status2=0x%X)", loadInfo, status2);
-            success = false;
-            break;
-        }
+        /* HuC image is now in WOPCM. Authentication is a separate step done
+         * via the GuC (vcsAuthenticateHuC, called after the GuC is READY) —
+         * HUC_LOAD_SUCCESSFUL cannot be set before that. */
+        success = true;
 
     } while (false);
 
@@ -4234,6 +4235,249 @@ bool vcsLoadHuCFirmware(MyIntelGPU *gpu, void *ctx,
     }
 
     return success;
+}
+
+struct CtbBufferDesc {
+    uint32_t head, tail, status, reserved[13];
+};
+
+/* MMIO round-trip on the HXG channel (GEN11_SOFT_SCRATCH +
+ * GEN11_GUC_HOST_INTERRUPT): write the request, ring the host interrupt,
+ * poll scratch0 for ORIGIN_GUC. i915 intel_guc_send_mmio does the same. */
+static bool gucMmioExchange(MyIntelGPU *gpu, const uint32_t *request, uint32_t len, uint32_t *outHeader)
+{
+    if (len == 0 || len > 4) {
+        return false;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        gpu->writeReg32(GEN11_SOFT_SCRATCH(i), request[i]);
+    }
+    (void)gpu->readReg32(GEN11_SOFT_SCRATCH(len - 1));   /* posting read */
+    gpu->writeReg32(GEN11_GUC_HOST_INTERRUPT, GUC_SEND_TRIGGER);
+
+    for (int i = 0; i < 1000; i++) {   /* 1000 * 10us = 10 ms */
+        IODelay(10);
+        uint32_t h = gpu->readReg32(GEN11_SOFT_SCRATCH(0));
+        if (h & GUC_HXG_MSG_0_ORIGIN) {
+            if (outHeader) {
+                *outHeader = h;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* HOST2GUC_SELF_CFG: set one KLV (descriptor/addr/size) for a CT buffer. */
+static bool gucSelfCfg(MyIntelGPU *gpu, uint16_t key, uint32_t len, uint64_t value)
+{
+    uint32_t req[4] = {
+        INTEL_GUC_ACTION_HOST2GUC_SELF_CFG,
+        ((uint32_t)key << 16) | (len & 0xFFFFu),
+        (uint32_t)(value & 0xFFFFFFFFu),
+        (uint32_t)(value >> 32),
+    };
+    for (int attempt = 0; attempt < 10; attempt++) {
+        uint32_t header = 0;
+        if (!gucMmioExchange(gpu, req, 4, &header)) {
+            IODebug("GuC self_cfg: no reply key=0x%x (attempt %d)", key, attempt);
+            IODelay(2000);
+            continue;
+        }
+        uint32_t type = header & GUC_HXG_MSG_0_TYPE;
+        if (type == GUC_HXG_TYPE_RESPONSE_SUCCESS) {
+            return true;
+        }
+        if (type == GUC_HXG_TYPE_NO_RESPONSE_RETRY) {
+            /* scratch 1 may carry reason */
+            IODebug("GuC self_cfg: RETRY key=0x%x reason=%u (attempt %d); retrying", key, gpu->readReg32(GEN11_SOFT_SCRATCH(1)) & 0xFFFFu, attempt);
+            IODelay(2000);
+            continue;
+        }
+        uint32_t t1 = gpu->readReg32(GEN11_SOFT_SCRATCH(1));
+        uint32_t t2 = gpu->readReg32(GEN11_SOFT_SCRATCH(2));
+        uint32_t t3 = gpu->readReg32(GEN11_SOFT_SCRATCH(3));
+        IODebug("GuC self_cfg: failure key=0x%x header=0x%x t1=0x%x t2=0x%x t3=0x%x", key, header, t1, t2, t3);
+        return false;
+    }
+    IODebug("GuC self_cfg: exhausted retries key=0x%x", key);
+    return false;
+}
+
+/*
+ * vcsEnableGuCCommunication — allocate the CTB blob, register it with the GuC
+ * (G2H first, then H2G), then enable CTB transport.
+ *
+ * Mirrors i915 intel_guc_ct_init + intel_guc_ct_enable: the GuC learns the
+ * buffer locations through Self-Config KLVs over MMIO, never via direct
+ * registers. Layout (one GEM allocation):
+ *   [0, 2048)    send desc     [2048, 4096) recv desc
+ *   [4096, 8192) H2G cmds      [8192, 24576) G2H cmds
+ */
+static bool vcsEnableGuCCommunication(MyIntelGPU *gpu)
+{
+    if (gpu->getCtbBlob()) {
+        return true;    /* enable once per boot */
+    }
+
+    MyIntelGEMBuffer *blob = gemBufferCreate(
+        CTB_BLOB_SIZE,
+        GEM_FLAG_CPU_WRITE | GEM_FLAG_CPU_READ | GEM_FLAG_GPU_READ | GEM_FLAG_GPU_WRITE,
+        (uint32_t *)gpu->getGsm(),
+        gpu->getGttTotal(),
+        (void *)gpu->getApertureVA(),
+        gpu->getApertureSize(),
+        &MyIntelGPU::ggttInvalidateTrampoline, gpu);
+    if (!blob) {
+        IODebug("GuC CTB: GEM alloc failed (%u bytes)", (uint32_t)CTB_BLOB_SIZE);
+        return false;
+    }
+    memset(blob->cpuAddr, 0, CTB_BLOB_SIZE);
+    gpu->ggttInvalidate();
+    gpu->clflushRange(blob->cpuAddr, CTB_BLOB_SIZE);
+
+    uint32_t base     = blob->ggttOffset;
+    uint32_t sendDesc = base;                       /* +0 */
+    uint32_t recvDesc = base + CTB_DESC_SIZE;       /* +2048 */
+    uint32_t h2gCmds  = base + 2 * CTB_DESC_SIZE;   /* +4096 */
+    uint32_t g2hCmds  = h2gCmds + CTB_H2G_BUFFER_SIZE;  /* +8192 */
+
+    /* Use len=1 (32-bit) for descriptor + buffer addresses test (GuC reason=2 was hinting that G2H descriptor field format differs). */
+    uint32_t vRdesc=recvDesc, vG2h=g2hCmds, vSendd=sendDesc, vH2g=h2gCmds;
+    if (!gucSelfCfg(gpu, GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY, 1, vRdesc) ||
+        !gucSelfCfg(gpu, GUC_KLV_SELF_CFG_G2H_CTB_ADDR_KEY,            1, vG2h)  ||
+        !gucSelfCfg(gpu, GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY,            1, CTB_G2H_BUFFER_SIZE) ||
+        !gucSelfCfg(gpu, GUC_KLV_SELF_CFG_H2G_CTB_DESCRIPTOR_ADDR_KEY, 1, vSendd) ||
+        !gucSelfCfg(gpu, GUC_KLV_SELF_CFG_H2G_CTB_ADDR_KEY,            1, vH2g)  ||
+        !gucSelfCfg(gpu, GUC_KLV_SELF_CFG_H2G_CTB_SIZE_KEY,            1, CTB_H2G_BUFFER_SIZE)) {
+        IODebug("GuC CTB: buffer registration failed");
+        return false;
+    }
+
+    uint32_t req[2] = { INTEL_GUC_ACTION_HOST2GUC_CONTROL_CTB, GUC_CTB_CONTROL_ENABLE };
+    uint32_t header = 0;
+    if (!gucMmioExchange(gpu, req, 2, &header)) {
+        IODebug("GuC CTB: CONTROL_CTB no reply");
+        return false;
+    }
+    if ((header & GUC_HXG_MSG_0_TYPE) != GUC_HXG_TYPE_RESPONSE_SUCCESS) {
+        IODebug("GuC CTB: CONTROL_CTB refused header=0x%x", header);
+        return false;
+    }
+
+    gpu->setCtbBlob(blob);
+    IODebug("GuC CTB: enabled (blob ggtt=0x%X h2g=0x%X g2h=0x%X)", base, h2gCmds, g2hCmds);
+    return true;
+}
+
+/*
+ * vcsAuthenticateHuC — ask the GuC to authenticate the HuC image
+ *
+ * The HuC RSA signature sits at the tail of the firmware blob (header + uCode,
+ * then RSA); the GuC authenticates it via INTEL_GUC_ACTION_AUTHENTICATE_HUC
+ * carried by the CTB (the GuC does not accept this action over MMIO — it
+ * answers RETRY_UNSPECIFIED). Steps: enable CTB transport, enqueue the message
+ * (HXG header + RSA GGTT offset), ring GUC_HOST_INTERRUPT, then poll
+ * HUC_LOAD_SUCCESSFUL (GEN11_HUC_KERNEL_LOAD_INFO bit0) or HUC_FW_VERIFIED
+ * (HUC_STATUS2 bit7). HuC image must be in WOPCM (vcsLoadHuCFirmware) and GuC
+ * READY.
+ */
+bool vcsAuthenticateHuC(MyIntelGPU *gpu)
+{
+    if (!gpu) {
+        return false;
+    }
+    uint32_t fwGgttOffset = gpu->getFwGgttOffset();
+    uint32_t fwSz = gpu->getFwSize();
+    if (fwGgttOffset == 0 || fwSz == 0) {
+        IODebug("HuC Auth: no firmware set");
+        return false;
+    }
+
+    /* RSA offset = fwGgttOffset + upload_size; upload_size = fwSz - rsa_size.
+     * CSS 0x1C = key_size_dw (uc_css_header). */
+    uint32_t keySizeDw = gpu->readAperture32(fwGgttOffset + 0x1C);
+    if (keySizeDw == 0 || keySizeDw > 4096) {
+        IODebug("HuC Auth: bad CSS key_size_dw=%u", keySizeDw);
+        return false;
+    }
+    uint32_t rsaBytes = keySizeDw * 4;
+    if (rsaBytes > fwSz) {
+        IODebug("HuC Auth: CSS key size %u > fw size %u", rsaBytes, fwSz);
+        return false;
+    }
+    uint32_t rsaGgtt = fwGgttOffset + fwSz - rsaBytes;
+    IODebug("HuC Auth: rsaGgtt=0x%X (fw=0x%X size=%u rsa=%uB)", rsaGgtt, fwGgttOffset, fwSz, rsaBytes);
+
+    if (!gpu->forceWakeGet()) {
+        IODebug("HuC Auth: forceWakeGet failed");
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        if (!vcsEnableGuCCommunication(gpu)) {
+            IODebug("HuC Auth: CTB enable failed");
+            break;
+        }
+
+        uint8_t *cpu = (uint8_t *)gpu->getCtbBlob()->cpuAddr;
+        struct CtbBufferDesc *sdesc = (struct CtbBufferDesc *)cpu;
+        struct CtbBufferDesc *rdesc = (struct CtbBufferDesc *)(cpu + CTB_DESC_SIZE);
+        volatile uint32_t *cmds = (volatile uint32_t *)(cpu + 2 * CTB_DESC_SIZE);
+        const uint32_t size = CTB_H2G_DWORDS;
+
+        uint32_t tail = sdesc->tail;
+        if (tail >= size) {
+            IODebug("HuC Auth: bad send desc tail=%u", tail);
+            break;
+        }
+
+        /* Header: FENCE=1, FORMAT=HXG(0), NUM_DWORDS=2 (HXG + rsaGgtt) */
+        uint32_t header = (1u << 16) | 2u;
+        uint32_t i = tail;
+        cmds[i] = header;
+        i = (i + 1) % size;
+        cmds[i] = INTEL_GUC_ACTION_AUTHENTICATE_HUC;
+        i = (i + 1) % size;
+        cmds[i] = rsaGgtt;
+        uint32_t newTail = (i + 1) % size;
+        OSSynchronizeIO();
+
+        gpu->clflushRange((void *)cmds, CTB_H2G_BUFFER_SIZE);
+        sdesc->tail = newTail;
+        gpu->clflushRange(sdesc, sizeof(*sdesc));
+        gpu->writeReg32(GEN11_GUC_HOST_INTERRUPT, GUC_SEND_TRIGGER);
+
+        for (int p = 0; p < 1000; p++) {   /* 1000 * 1ms = 1 s */
+            uint32_t loadInfo = gpu->readReg32(GEN11_HUC_KERNEL_LOAD_INFO);
+            uint32_t status2  = gpu->readReg32(HUC_STATUS2);
+            if ((loadInfo & HUC_LOAD_SUCCESSFUL) || (status2 & HUC_FW_VERIFIED)) {
+                IODebug("HuC Auth: VERIFIED (loadInfo=0x%X status2=0x%X)", loadInfo, status2);
+                ok = true;
+                break;
+            }
+            IODelay(1000);
+        }
+
+        /* Drain the G2H response so the 4 KB recv buffer never fills up. */
+        if (rdesc->head != rdesc->tail) {
+            rdesc->head = rdesc->tail;
+            OSSynchronizeIO();
+            gpu->clflushRange(rdesc, sizeof(*rdesc));
+        }
+
+        if (!ok) {
+            uint32_t loadInfo = gpu->readReg32(GEN11_HUC_KERNEL_LOAD_INFO);
+            uint32_t status2  = gpu->readReg32(HUC_STATUS2);
+            IODebug("HuC Auth: FAILED — not verified (loadInfo=0x%X status2=0x%X, g2h head=%u tail=%u status=0x%X)",
+                    loadInfo, status2, rdesc->head, rdesc->tail, rdesc->status);
+        }
+    } while (false);
+
+    gpu->forceWakePut();
+    IODebug("HuC Auth: %s", ok ? "SUCCESS" : "FAILED");
+    return ok;
 }
 
 bool MyIntelGPU::forceWakeGet(void)

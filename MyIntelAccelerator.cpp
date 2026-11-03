@@ -115,7 +115,8 @@ IOReturn MyIntelAccelerator::newUserClient(task_t resettingTask, void *securityI
     AccelDebug("newUserClient: type=0x%X from task=%p", (unsigned int)type, resettingTask);
 
     if (type == kMyIntelAccelInfoClientType ||
-        type == kMyIntelAccelMetalClientType) {
+        type == kMyIntelAccelMetalClientType ||
+        type == kMyIntelAccelSharedClientType) {
         MyIntelAccelClient *client = new MyIntelAccelClient;
         if (!client) {
             return kIOReturnNoMemory;
@@ -151,6 +152,13 @@ bool MyIntelAccelerator::publishProperties(void)
 
     /* model — System Profiler GPU naming (real silicon: Raptor Lake-U 0xA7AC) */
     setProperty("model", "Intel Iris Xe");
+
+    /* Metal plugin discovery: the loader reads these from the IOAccelerator
+     * node, not from the IOPCIDevice personality. Name must match the bundle
+     * shipped in Contents/PlugIns (MyIntelGPUMTLDriver.bundle). */
+    setProperty("MetalPluginName", "MyIntelGPUMTLDriver");
+    setProperty("MetalPluginClassName", "MyIntelGPUMTLDevice");
+    setProperty("MetalStatisticsName", "Intel Iris Xe 80EU");
 
     return ok;
 }
@@ -209,7 +217,7 @@ IOReturn MyIntelAccelClient::clientClose(void)
     return kIOReturnSuccess; // ยืนยันเนทีฟสิทธิ์ความสำเร็จ
 }
 
-/* ── M2C: Metal device-class client (type 5) — IOAccelerator shared/device contract ──
+/* ── M2C: Metal device-class client (type 5) + shared-client probe (type 6) ──
  * IOAccelDeviceCreateWithAPIProperty (private, IOAccelerator.framework):
  *   type-5 IOServiceOpen -> sel=9 (16B API name) -> sel=2 (600B caps struct) ->
  *   dlsym(RTLD_SELF=-3, name @ caps+0x18) — NULL => factory returns NULL (device nil).
@@ -299,7 +307,8 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
                         arguments->scalarOutput, arguments->scalarOutputCount);
     }
 
-    if (fClientType == kMyIntelAccelMetalClientType) {
+    if (fClientType == kMyIntelAccelMetalClientType ||
+        fClientType == kMyIntelAccelSharedClientType) {
         myAccelNameInitOnce();
 
         /* IOAccelSharedSetupDirtyRing uses selector 10 and a 24-byte output. */
@@ -310,7 +319,8 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
 
         switch (selector) {
         case 9: { /* set API property name — 16B structIn e.g. "Metal\0..." */
-            AccelDebug("DISC M2C sel=9 apiName stIn=%lu stOut=%lu",
+            AccelDebug("DISC M2C type=%u sel=9 apiName stIn=%lu stOut=%lu",
+                       (unsigned int)fClientType,
                        (unsigned long)arguments->structureInputSize,
                        (unsigned long)arguments->structureOutputSize);
             return kIOReturnSuccess;
@@ -321,11 +331,13 @@ IOReturn MyIntelAccelClient::externalMethod(uint32_t selector,
             uint8_t *caps = (uint8_t *)arguments->structureOutput;
             bzero(caps, arguments->structureOutputSize);
             strlcpy((char *)(caps + 0x18), gMyAccelName, 64);
-            AccelDebug("DISC M2C sel=2 caps 600B name=%s", gMyAccelName);
+            AccelDebug("DISC M2C type=%u sel=2 caps 600B name=%s",
+                       (unsigned int)fClientType, gMyAccelName);
             return kIOReturnSuccess;
         }
         default:
-            AccelDebug("DISC M2C sel=%u in=%u out=%u stIn=%lu stOut=%lu -> SUCCESS",
+            AccelDebug("DISC M2C type=%u sel=%u in=%u out=%u stIn=%lu stOut=%lu -> SUCCESS",
+                       (unsigned int)fClientType,
                        (unsigned int)selector,
                        (unsigned int)arguments->scalarInputCount,
                        (unsigned int)arguments->scalarOutputCount,

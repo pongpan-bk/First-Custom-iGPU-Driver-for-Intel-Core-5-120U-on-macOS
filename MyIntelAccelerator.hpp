@@ -33,6 +33,10 @@ class MyIntelGPU;
  * Diagnostic-only client: returns a fixed-size info struct. */
 #define kMyIntelAccelInfoClientType   0x100
 #define kMyIntelAccelMetalClientType  5
+/* Metal shared user client probe (type 6).  Accepted for diagnosis of
+ * MTLCreateSystemDefaultDevice() returning nil; routed through the M2C
+ * pass-through path so every selector is logged. */
+#define kMyIntelAccelSharedClientType 6
 
 /* Diagnostic info returned by selector 0 of MyIntelAccelClient */
 struct MyIntelAccelInfo {
@@ -60,8 +64,9 @@ public:
 
     /*! @brief User-client factory.
      *  kMyIntelAccelInfoClientType -> diagnostic client.
-     *  Standard IOGraphicsAccelerator2 numeric types (0-9, 0x20, 0x21)
-     *  return kIOReturnUnsupported (logged — evidence of who probes). */
+     *  kMyIntelAccelMetalClientType / kMyIntelAccelSharedClientType -> M2C probes.
+     *  Standard IOGraphicsAccelerator2 numeric types return kIOReturnUnsupported
+     *  (logged — evidence of who probes). */
     virtual IOReturn newUserClient(task_t resettingTask, void *securityID,
                                    UInt32 type, OSDictionary *properties,
                                    IOUserClient **handler) override;
@@ -105,7 +110,8 @@ private:
 
 /*! @brief User client for diagnostic and Metal factory contracts.
  *  The diagnostic type exposes one fixed-size info selector. The Metal type
- *  handles only the IOAccelDeviceCreateWithAPIProperty selectors. */
+ *  and shared-client probe handle the IOAccelDeviceCreateWithAPIProperty
+ *  selectors. */
 class MyIntelAccelClient : public IOUserClient {
     OSDeclareDefaultStructors(MyIntelAccelClient)
 

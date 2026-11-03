@@ -572,6 +572,53 @@ enum {
 #define   HUC_FW_VERIFIED         (1U << 7)  /* HuC firmware verified */
 
 /*
+ * GuC MMIO HXG channel — host→GuC messages go through GEN11_SOFT_SCRATCH(0..3)
+ * and ring GEN11_GUC_HOST_INTERRUPT; GuC answers by writing a HXG response
+ * header into scratch 0. (i915 gt/uc/intel_guc.c intel_guc_send_mmio and
+ * abi/guc_messages_abi.h: ORIGIN host=0/guc=1<<31, TYPE request=0,
+ * no_response_busy=3, response_failure=6, response_success=7.)
+ */
+#define GEN11_SOFT_SCRATCH(n)     (0x190240 + 4 * (n))
+#define GEN11_GUC_HOST_INTERRUPT  0x1901f0
+#define GUC_SEND_TRIGGER          (1U << 0)
+#define INTEL_GUC_ACTION_AUTHENTICATE_HUC 0x4000
+#define INTEL_GUC_ACTION_HOST2GUC_SELF_CFG 0x0508
+#define INTEL_GUC_ACTION_HOST2GUC_CONTROL_CTB 0x4509
+#define GUC_HXG_MSG_0_ORIGIN      (1U << 31)
+#define GUC_HXG_MSG_0_TYPE        (0x7U << 28)
+#define GUC_HXG_TYPE_RESPONSE_SUCCESS (0x7U << 28)
+#define GUC_HXG_TYPE_RESPONSE_FAILURE (0x6U << 28)
+#define GUC_HXG_TYPE_NO_RESPONSE_RETRY (0x5U << 28)
+
+/* GuC Self-Config KLV keys (abi/guc_klvs_abi.h) — CTB registration goes
+ * through MMIO HOST2GUC_SELF_CFG; CONTROL_CTB enables the CTB afterwards. */
+#define GUC_KLV_SELF_CFG_H2G_CTB_ADDR_KEY             0x0902
+#define GUC_KLV_SELF_CFG_H2G_CTB_DESCRIPTOR_ADDR_KEY  0x0903
+#define GUC_KLV_SELF_CFG_H2G_CTB_SIZE_KEY             0x0904
+#define GUC_KLV_SELF_CFG_G2H_CTB_ADDR_KEY             0x0905
+#define GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY  0x0906
+#define GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY             0x0907
+#define GUC_CTB_CONTROL_DISABLE   0
+#define GUC_CTB_CONTROL_ENABLE    1
+
+#define GUC_CTB_FORMAT_HXG        0
+#define GUC_CTB_HDR_LEN           1
+#define GUC_CTB_MSG_0_FENCE       (0xFFFFU << 16)
+#define GUC_CTB_MSG_0_FORMAT      (0xFU << 12)
+#define GUC_CTB_MSG_0_NUM_DWORDS  (0xFFU << 0)
+
+/* CTB blob layout in one GEM allocation (mirrors i915 intel_guc_ct_init):
+ *   [0, 2048)     send descriptor (64 B used, padded to 2 KB)
+ *   [2048, 4096)  recv descriptor
+ *   [4096, 8192)  H2G command buffer (4 KB)
+ *   [8192, 24576) G2H command buffer (16 KB) */
+#define CTB_DESC_SIZE             2048
+#define CTB_H2G_BUFFER_SIZE       4096
+#define CTB_G2H_BUFFER_SIZE       16384
+#define CTB_BLOB_SIZE             (2 * CTB_DESC_SIZE + CTB_H2G_BUFFER_SIZE + CTB_G2H_BUFFER_SIZE)
+#define CTB_H2G_DWORDS            (CTB_H2G_BUFFER_SIZE / 4)
+
+/*
  * GuC Firmware Load Registers (GuC WOPCM DMA path)
  * Verified against i915 master: gt/uc/intel_guc_reg.h (2026).
  * GuC is loaded by the same WOPCM DMA engine as HuC but with different
@@ -667,6 +714,10 @@ public:
     inline void setFwGgttOffset(uint32_t v) { fwGgttOffset = v; }
     inline uint32_t getFwSize() const { return fwSize; }
     inline void setFwSize(uint32_t v) { fwSize = v; }
+    inline bool isWopcmReady() const { return fWOPCMReady; }
+    inline void setWopcmReady() { fWOPCMReady = true; }
+    inline MyIntelGEMBuffer *getCtbBlob() const { return fCtbBlob; }
+    inline void setCtbBlob(MyIntelGEMBuffer *b) { fCtbBlob = b; }
 
     /*
      * ─────────────────────────────────────
@@ -1305,7 +1356,10 @@ private:
     /* HuC Firmware Load — set by client before VCS init */
     uint32_t                 fwGgttOffset;     /*!< Firmware GGTT offset (set by client via GEM buffer) */
     uint32_t                 fwSize;           /*!< Firmware binary size in bytes */
-    bool                     fHuCLoaded;       /*!< True if HuC firmware has been loaded */
+    bool                     fHuCLoaded;       /*!< True if HuC firmware authenticated */
+    bool                     fHuCDmad;         /*!< True if HuC image DMA'd into WOPCM */
+    bool                     fWOPCMReady;      /*!< True if WOPCM partition was programmed */
+    MyIntelGEMBuffer        *fCtbBlob;        /*!< CTB blob (GuC command transport), allocated once */
     uint32_t                 gucGgttOffset;    /*!< GuC firmware GGTT offset (set by client) */
     uint32_t                 gucSize;          /*!< GuC firmware binary size in bytes */
     bool                     fGuCLoaded;       /*!< True if GuC firmware has been loaded */

@@ -41,6 +41,18 @@ struct VCSGemSlot {
     bool              active;
 };
 
+/* Per-client media session table (Phase A contract, selectors 22-25) */
+#define VCS_SESSION_MAX 8
+
+struct VCSMediaSession {
+    bool     active;
+    uint32_t codec;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t fence;      /* last fence issued by this session (0 = none) */
+};
+
 /* Per-client external (IOSurface) GGTT binding table (2.0.260) */
 #define VCS_EXT_MAX_SLOTS 16
 
@@ -104,6 +116,15 @@ public:
                                    IOExternalMethodArguments *args);
     static IOReturn getContextInfoVCS2(OSObject *target, void *reference,
                                       IOExternalMethodArguments *args);
+    /* Phase A selectors 22-25: session contract over the raw submit path */
+    static IOReturn sessionBegin(OSObject *target, void *reference,
+                                 IOExternalMethodArguments *args);
+    static IOReturn sessionSubmit(OSObject *target, void *reference,
+                                  IOExternalMethodArguments *args);
+    static IOReturn sessionWait(OSObject *target, void *reference,
+                                IOExternalMethodArguments *args);
+    static IOReturn sessionEnd(OSObject *target, void *reference,
+                               IOExternalMethodArguments *args);
     /* 2.0.260: map external physical address (IOSurface) into PPGTT */
     static IOReturn mapExternalPhys(OSObject *target, void *reference, IOExternalMethodArguments *args);
     /* 2.0.261: Get VideoToolbox decoder configuration */
@@ -127,6 +148,14 @@ private:
      * submitVCSWorkload (internal).  Does NOT touch args output fields. */
     IOReturn submitVCSWorkloadToRing(IOExternalMethodArguments *args,
                                      MyIntelRing *ring);
+    /* Shared by selector 6 and session submit: validates + copies dwords to
+     * the target ring and kicks it. Does not touch args. */
+    IOReturn submitDwordsToRing(const void *userCmds, size_t cmdSizeByte,
+                                MyIntelRing *ring);
+    /* Shared by waitForCompletion(VCS2) and sessionWait. Returns head in
+     * *outHead (may be NULL). */
+    IOReturn waitRingDrain(MyIntelRing *ring, uint32_t timeoutMs,
+                           uint32_t *outHead);
     IOReturn waitForRingCompletion(IOExternalMethodArguments *args,
                                    MyIntelRing *ring);
     IOReturn doEngineResetCore(MyIntelRing *ring, uint32_t resetDomain);
@@ -136,6 +165,8 @@ private:
     uint32_t    fOpenCount;
     VCSGemSlot  fGemSlots[VCS_GEM_MAX_HANDLES];
     VCSExternalSlot fExtSlots[VCS_EXT_MAX_SLOTS];
+    VCSMediaSession fSessions[VCS_SESSION_MAX];
+    uint32_t    fFenceSerial;
 };
 
 #endif /* __MY_INTEL_VCS_CLIENT_H__ */
