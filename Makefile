@@ -83,14 +83,14 @@ MyIntelGPUVersion.h: FORCE
 	@rm -f $@.tmp
 
 # ─── Compiler Flags ──────────────────────────────────────────────
-# -D_FORTIFY_SOURCE=0 (must be exactly 0 — MacKernelSDK/Headers/string.h:127 checks
-# `defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0` and only then calls the real strlcpy;
-# if undefined or =1 we fall through to line 153 `#define strlcpy(...) __builtin___strlcpy_chk(...)`
-# producing an undefined __strlcpy_chk, a libSystem (userspace) symbol — the kext
-# links against kernel/libkern and cannot resolve it → must be eliminated
-# Note: __bzero still in the undefined list is a real kernel symbol (proven by the
-# RtWlanU.kext / RtWlanU1827.kext deployed under /Library/Extensions) — leave it alone
-# Do NOT use -U_FORTIFY_SOURCE: undefining leaves the guard failing the same way, same result
+# -D_FORTIFY_SOURCE=0 (ต้องเป็นค่า 0 — MacKernelSDK/Headers/string.h:127 เช็ค
+# `defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0` แล้วจึงเรียก strlcpy จริง
+# ถ้า undefined หรือ =1 จะไปหล่นลงบรรทัด 153 `#define strlcpy(...) __builtin___strlcpy_chk(...)`
+# เกิด undefined __strlcpy_chk ซึ่งเป็น symbol ของ libSystem (userspace) — kext ที่
+# link กับ kernel/libkern resolve ไม่ได้ → ต้องกำจัดออก
+# หมายเหตุ: __bzero ที่ยังเหลือใน undefined list เป็น kernel symbol จริง (พิสูจน์แล้วจาก
+# RtWlanU.kext / RtWlanU1827.kext ที่ deploy ใน /Library/Extensions) ไม่ต้องแตะ
+# ห้ามใช้ -U_FORTIFY_SOURCE: undefine แล้ว guard ยังไม่ผ่าน ผลเหมือนเดิม
 ifeq ($(USE_MKS),1)
 KERNEL_HEADERS   = -I$(SDK_DIR)/Headers \
                    -I$(SDK_XCRUN)/usr/include
@@ -100,22 +100,26 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: build must not exceed 220,000 bytes (main repo ships 216,000; this repo
-# adds IntelFramebuffer.cpp ~10KB → 4.4.x links at 217,296 bytes)
+# Size budget: 220,000 bytes (เพิ่มจาก 216,000 — 2026-10-29; doEngineResetCore
+# refactor เพิ่ม ~1.8 KB; ยังอยู่ใน kernel page ที่ปลอดภัย)
+# Size budget: 216,000 bytes (user 2026-10-23; 210,000 ก่อนหน้า 2026-10-20
+# เพราะ __TEXT เต็มหน้าพอดี — 4.4.173 เพิ่ม BCS fence + vblank bridge 3.6KB
+# ซึ่งดัน __TEXT ขึ้นอีก 1 หน้า; gate เดิมเข้มกว่าเพดานจริงของ KC โดยไม่มีเหตุผล)
 # -Oz                    : size-first optimizer (smaller than -Os)
 # -ffunction-sections/-fdata-sections + -Wl,-dead_strip
-#                        : section-per-function, then the linker drops functions/data
-#                          nobody references across the whole TU (ld normally merges sections
-#                          so it can only cut when sections are split)
-# Note: static ctors of OSMetaClass (register the class at load time) live in
-# __mod_init_funcs which the linker treats as roots — class metadata survives dead_strip
-# (verified via nm + kextutil + ioreg after build)
+#                        : section-per-function แล้ว linker ตัดฟังก์ชัน/ข้อมูล
+#                          ที่ไม่มีใครอ้างถึง ออกทั้ง TU (ปกติ ld รวม section ไว้ด้วยกัน
+#                          ตัดได้เฉพาะเมื่อแยก section)
+# หมายเหตุ: static ctors ของ OSMetaClass (ลง register class ตอนโหลด) อยู่ใน
+# __mod_init_funcs ซึ่ง linker ถือเป็น root — class metadata รอด dead_strip
+# (พิสูจน์แล้วด้วย nm + kextutil + ioreg หลัง build)
 CXXFLAGS = -std=c++14 \
            -mkernel \
            -fapple-kext \
            -mmacosx-version-min=12.0 \
            -arch x86_64 \
            -Oz \
+           -flto \
            -ffunction-sections \
            -fdata-sections \
            -nostdlib \
@@ -134,45 +138,92 @@ CXXFLAGS = -std=c++14 \
            $(KERNEL_HEADERS)
 
 # ─── Linker Flags ────────────────────────────────────────────────
-# -dead_strip : drop sections nobody references (pairs with -ffunction-sections above)
-# -x          : cut local symbols at link time (same effect as strip -x)
-# -exported_symbols_list : keep only 38 symbols (_kmod_info, _VblankEvent,
-#           _vcsCmd*) — the rest (~286 C++ mangled syms) are hidden at link time
-#           and strip -x removes them from strtab/symtab → saves ~18KB of LINKEDIT
-#           Class registration runs through __mod_init_func (section-based), not
-#           symbol names, so personality matching is unaffected (verified via nm)
-LDFLAGS = -Xlinker -kext \
+# -dead_strip : ตัด section ที่ไม่ถูกอ้างถึง (คู่กับ -ffunction-sections ด้านบน)
+# -x          : ตัด local symbol ตอน link (ผลเดียวกับ strip -x)
+# -exported_symbols_list : เก็บ symbol ไว้แค่ 2 ตัว (_kmod_info, _VblankEvent)
+#           ที่เหลือ (C++ mangled + MFX/VEBOX builders ที่ไม่มีใครเรียกในเคอร์เนล)
+#           ตัดออกจากโค้ด kext ทั้งหมด — userspace harness สร้าง packet เองแล้ว
+#           kext เป็นแค่ตัวกลางส่ง buffer เข้า ring (_VblankEvent อยู่เพราะ
+#           macOS 15 ถอดออกจาก IOGraphicsFamily — ขาดแล้ว OSKext::load ล้ม)
+LDFLAGS = -flto \
+          -Xlinker -kext \
           -Xlinker -dead_strip \
           -Xlinker -x \
           -Xlinker -exported_symbols_list \
           -Xlinker $(CURDIR)/exported_symbols.txt
 
-# ─── Sources (Pure Native — 11 files, no Lilu plugin shim) ───────
+# ─── Sources (Pure Native — 8 TUs, no Lilu plugin shim) ─────────
+# IntelFramebuffer.cpp is REQUIRED: MyIntelGPU.cpp calls
+# IntelFramebuffer::initInterrupts / handleInterrupt / enableVblankInterrupt /
+# disableInterrupts / dumpDiagnostics. Commit bae5052 deleted it as "obsolete"
+# but the call sites remained, leaving 8 undefined C++ symbols in the kext.
+# A kext with unresolved externals is rejected by OSKext::load — the driver
+# silently never appears in kextstat (observed 2026-10-28). Kept restored.
+#
+# The kext is a thin macOS↔GPU bridge only (display + GEM/ring/VCS submit).
+# Codec command BUILDES live in userspace (VCSMediaHarness/) — the kernel never
+# calls them; MyIntelVCSCommand.cpp / MyIntelVCS.cpp / MyIntelAccelerator.cpp /
+# MyIntelObfuscate.h were moved out of the driver tree (2026-11-11).
 SRC = MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
-      MyIntelAccelerator.cpp MyIntelMedia.cpp \
+      MyIntelMedia.cpp \
       MyIntelRing.cpp MyIntelGEMBuffer.cpp MyIntelGPUClient.cpp \
-      MyIntelVCSCommand.cpp MyIntelVCSClient.cpp \
+      MyIntelVCSClient.cpp \
       MyIntelEDIDParser.cpp
 OBJ = MyIntelGPU.o IntelFramebuffer.o MyIntelFramebuffer.o MyIntelMedia.o \
-      MyIntelAccelerator.o MyIntelRing.o MyIntelGEMBuffer.o MyIntelGPUClient.o \
-      MyIntelVCSCommand.o MyIntelVCSClient.o \
+      MyIntelRing.o MyIntelGEMBuffer.o MyIntelGPUClient.o \
+      MyIntelVCSClient.o \
       MyIntelEDIDParser.o
 
-# ─── Metal driver plugin bundle ──────────────────────────────────
-# MyIntelAccelerator.cpp sets MetalPluginName="MyIntelGPUMTLDriver" at runtime,
-# so that bundle MUST sit inside the kext's Contents/PlugIns/ for Metal to
-# resolve it. Shipping it beside the kext leaves MetalPluginName dangling —
-# System Profiler then reports "Metal: Supported" off the plist string alone
-# while no MTLDevice is ever created.
-PLUGIN_BUNDLE := MyIntelGPUMTLDriver.bundle
-KEXT_PLUGINS  := $(TARGET).kext/Contents/PlugIns
-PLUGIN_DEST   := $(KEXT_PLUGINS)/$(PLUGIN_BUNDLE)
-
-.PHONY: all clean install load unload lint format version strip_binary tools pkg FORCE
+.PHONY: all clean install load unload lint format version strip_binary tools FORCE myintel-decode pkg
 
 .DEFAULT_GOAL := all
 
-all: $(TARGET).kext/Contents/MacOS/$(TARGET) $(PLUGIN_DEST)
+all: $(TARGET).kext/Contents/MacOS/$(TARGET)
+
+# ─── Userspace H.264 application frontend (Layer 1) ───────────────
+USER_DECODE_DIR = build/myintel-decode
+USER_DECODE_OBJS = $(USER_DECODE_DIR)/myintel-decode.o \
+                   $(USER_DECODE_DIR)/myintelvcs_bridge.o \
+                   $(USER_DECODE_DIR)/MyIntelVCSCommand.o
+
+myintel-decode: $(USER_DECODE_DIR)/myintel-decode
+
+test-vcs-pipeline:
+	mkdir -p build
+	clang++ -std=c++14 -O2 -Wall -Wextra -I VCSMediaHarness \
+	  -o build/test-vcs-pipeline-kernel-builder VCSMediaHarness/test_pipeline_init.cpp MyIntelVCSCommand.cpp
+	clang++ -std=c++14 -O2 -Wall -Wextra -I VCSMediaHarness \
+	  -o build/test-vcs-pipeline-harness-builder VCSMediaHarness/test_pipeline_init.cpp \
+	  VCSMediaHarness/MyIntelVCSCommand.cpp
+	build/test-vcs-pipeline-kernel-builder
+	build/test-vcs-pipeline-harness-builder
+
+$(USER_DECODE_DIR):
+	mkdir -p "$@"
+
+$(USER_DECODE_DIR)/myintel-decode.o: myintel-decode.c \
+                                    VCSMediaHarness/myintel_vcs_user.h \
+                                    VCSMediaHarness/myintelvcs_bridge.h \
+                                    VCSMediaHarness/myintel_h264_parse.h \
+                                    VCSMediaHarness/myintel_hevc_parse.h | $(USER_DECODE_DIR)
+	clang -std=c11 -O2 -Wall -Wextra -I VCSMediaHarness -c -o "$@" "$<"
+
+$(USER_DECODE_DIR)/myintelvcs_bridge.o: VCSMediaHarness/myintelvcs_bridge.c \
+                                        VCSMediaHarness/myintelvcs_bridge.h \
+                                        VCSMediaHarness/myintel_vcs_user.h \
+                                        VCSMediaHarness/myintel_h264_parse.h \
+                                        VCSMediaHarness/myintel_hevc_parse.h \
+                                        VCSMediaHarness/MyIntelVCS.h \
+                                        VCSMediaHarness/MyIntelVCSCommand.h | $(USER_DECODE_DIR)
+	clang -std=c11 -O2 -I VCSMediaHarness -c -o "$@" "$<"
+
+$(USER_DECODE_DIR)/MyIntelVCSCommand.o: VCSMediaHarness/MyIntelVCSCommand.cpp \
+                                        VCSMediaHarness/MyIntelVCSCommand.h | $(USER_DECODE_DIR)
+	clang++ -std=c++14 -O2 -I VCSMediaHarness -c -o "$@" "$<"
+
+$(USER_DECODE_DIR)/myintel-decode: $(USER_DECODE_OBJS)
+	clang++ -o "$@" $(USER_DECODE_OBJS) \
+	  -framework IOKit -framework CoreFoundation -framework Foundation
 
 # ─── Compile ─────────────────────────────────────────────────────
 # Every object depends on the generated version header so a CFBundleVersion
@@ -192,7 +243,7 @@ $(TARGET).kext/Contents/Info.plist: Info.plist FORCE
 $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.plist
 	mkdir -p "$(TARGET).kext/Contents/MacOS"
 	$(CC) $(CXXFLAGS) $(LDFLAGS) -o "$@" $(OBJ) $(if $(wildcard $(KMOD_LIB)),$(KMOD_LIB))
-	# strip -x -S "$@"
+	strip -x -S "$@"
 	ls -la "$(TARGET).kext/Contents/MacOS/"
 	@actual=$$(stat -f%z "$@"); \
 	if [ "$$actual" -gt 220000 ]; then \
@@ -201,16 +252,9 @@ $(TARGET).kext/Contents/MacOS/$(TARGET): $(OBJ) $(TARGET).kext/Contents/Info.pli
 		echo "─── Build complete: $(TARGET).kext  [$(STAMPED_VERSION)]  $$actual bytes (≤220000) ───"; \
 	fi
 
-# ─── Embed Metal plugin bundle ───────────────────────────────────
-$(PLUGIN_DEST): $(PLUGIN_BUNDLE)/Contents/Info.plist $(PLUGIN_BUNDLE)/Contents/MacOS/MyIntelGPUMTLDriver
-	@mkdir -p "$(KEXT_PLUGINS)"
-	rm -rf "$(PLUGIN_DEST)"
-	cp -R "$(PLUGIN_BUNDLE)" "$(PLUGIN_DEST)"
-	@echo "   embedded plugin: $(PLUGIN_DEST)"
-
 # ─── Utilities ───────────────────────────────────────────────────
 clean:
-	rm -rf $(TARGET).kext $(OBJ) MyIntelGPUVersion.h
+	rm -rf $(TARGET).kext $(OBJ) MyIntelGPUVersion.h $(USER_DECODE_DIR)
 
 install: all
 	sudo chown -R root:wheel $(TARGET).kext
@@ -233,6 +277,12 @@ version:
 	@echo "Stamped      : $(STAMPED_VERSION)"
 
 # ─── Code Quality (Pure Native files) ────────────────────────────
+FORMAT_SOURCES = $(filter-out MyIntelGPUVersion.h,$(wildcard *.c *.cc *.cpp *.h *.hpp *.m *.mm *.metal))
+FORMAT_SOURCES += $(wildcard VCSMediaHarness/*.c VCSMediaHarness/*.cc \
+                           VCSMediaHarness/*.cpp VCSMediaHarness/*.h \
+                           VCSMediaHarness/*.hpp VCSMediaHarness/*.m \
+                           VCSMediaHarness/*.mm VCSMediaHarness/*.metal)
+
 lint:
 	clang-tidy --checks="*" --warnings-as-errors="*" \
 	  MyIntelGPU.cpp IntelFramebuffer.cpp MyIntelFramebuffer.cpp \
@@ -240,14 +290,33 @@ lint:
 	  $(CXXFLAGS) 2>&1 || echo "Warning: clang-tidy not installed — skipping"
 
 format:
-	clang-format -style=file -i \
-	  MyIntelGPU.cpp MyIntelGPU.hpp \
-	  IntelFramebuffer.cpp IntelFramebuffer.hpp \
-	  MyIntelFramebuffer.cpp MyIntelFramebuffer.hpp \
-	  MyIntelAccelerator.cpp MyIntelAccelerator.hpp \
-	  MyIntelRing.cpp MyIntelRing.hpp \
-	  MyIntelGEMBuffer.cpp MyIntelGEMBuffer.hpp \
-	  MyIntelEDIDParser.cpp MyIntelEDIDParser.hpp 2>&1 || echo "Warning: clang-format not installed — skipping"
+	clang-format -style=file -i $(FORMAT_SOURCES)
+
+# ─── Installer package (.pkg) — release attachment for end users ─
+PKG_STAGE   = build/pkg-stage
+PKG_NAME    := $(TARGET)-pkg.pkg
+
+pkg: $(TARGET).kext/Contents/MacOS/$(TARGET)
+	@echo "─── Staging package tree ───"
+	@rm -rf "$(PKG_STAGE)"
+	@mkdir -p "$(PKG_STAGE)/Library/Extensions"
+	@cp -R "$(TARGET).kext" "$(PKG_STAGE)/Library/Extensions/"
+	@chown -R root:wheel "$(PKG_STAGE)/Library/Extensions/$(TARGET).kext" 2>/dev/null || true
+	@chmod -R 755 "$(PKG_STAGE)/Library/Extensions/$(TARGET).kext"
+	@find "$(PKG_STAGE)/Library/Extensions/$(TARGET).kext" -name '.DS_Store' -delete
+	@codesign -s - --force "$(PKG_STAGE)/Library/Extensions/$(TARGET).kext" 2>/dev/null || true
+	@PKG_VERSION=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$(PKG_STAGE)/Library/Extensions/$(TARGET).kext/Contents/Info.plist") && \
+	 PKG_NAME="$(TARGET)-$$PKG_VERSION.pkg" && \
+	 echo "─── Building $$PKG_NAME ───" && \
+	 pkgbuild --root "$(PKG_STAGE)/Library" \
+	          --identifier com.pongpan-bk.$(TARGET) \
+	          --version "$$PKG_VERSION" \
+	          --install-location "/Library" \
+	          --scripts packaging \
+	          --ownership preserve \
+	          "$$PKG_NAME" && \
+	 ls -lh "$$PKG_NAME" && \
+	 echo "Built $$PKG_NAME"
 
 # ─── Binary Stripping ─────────────────────────────────────────────
 strip_binary:
@@ -265,29 +334,3 @@ sizecheck:
 	else \
 		echo "Size check: $$actual bytes (limit $$maxsize) — OK"; \
 	fi
-
-# ─── Installer Package (.pkg) ────────────────────────────────────
-# pkgbuild --root takes a payload DIRECTORY whose CONTENTS get installed at
-# --install-location. Pointing --root at MyIntelGPU.kext itself with
-# --install-location=/Library/Extensions would install the bundle's Contents/
-# directly into /Library/Extensions (no .kext wrapper) — a broken kext.
-# Instead the payload lands at /Library/Extensions/MyIntelGPU.kext/Contents/...
-# which is exactly what packaging/postinstall expects.
-# --ownership recommended assigns root:wheel to payload items
-# installed under /Library — required for kext loading. packaging/ holds
-# preinstall (backup existing kext) and postinstall (chown + kmutil).
-PKG_IDENTIFIER := com.pongpan-bk.MyIntelGPU
-PKG_NAME       := $(TARGET)-$(STAMPED_VERSION).pkg
-
-pkg: all
-	@echo "─── Building installer package: $(PKG_NAME)"
-	/usr/bin/pkgbuild \
-		--root "$(TARGET).kext" \
-		--scripts packaging \
-		--identifier $(PKG_IDENTIFIER) \
-		--version "$(STAMPED_VERSION)" \
-		--install-location /Library/Extensions/$(TARGET).kext \
-		--ownership recommended \
-		"$(PKG_NAME)"
-	@ls -la "$(PKG_NAME)"
-	@echo "─── Package complete: $(PKG_NAME)"
