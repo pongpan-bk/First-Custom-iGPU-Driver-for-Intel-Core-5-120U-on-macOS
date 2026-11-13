@@ -1,24 +1,17 @@
-"As long as you view macOS as Unix, you will only get what you've always got. I view macOS as Linux, and that's why I get what you see."
-
-<img width="1920" height="1080" alt="Screenshot 2569-11-02 at 5 32 57 PM" src="https://github.com/user-attachments/assets/a070a163-16f7-4861-9894-cf361eb4cc74" />
-<img width="1920" height="1080" alt="Screenshot 2569-11-02 at 2 54 39 PM" src="https://github.com/user-attachments/assets/d9e2b294-c212-4069-9b6b-522bc7d1e252" />
-
-
-
-
 <div align="center">
 
-# ⚡ MYINTELGPU — HONEST IDENTITY DRIVER
+<em>"As long as you view macOS as Unix, you will only get what you've always got. I view macOS as Linux, and that's why I get what you see."</em>
 
-### Custom macOS Kernel Extension for Intel Gen 12 / Raptor Lake-U iGPU
+# ⚡ MyIntelGPU — Honest-Identity Intel iGPU Driver for macOS
 
-[![Built with OpenCode](https://shields.io)](https://opencode.ai)
-[![Architecture: Gen12 Alder/Raptor](https://shields.io)](https://github.com)
-[![Target OS: macOS](https://shields.io)](https://github.com)
+### Custom macOS kernel extension for the Intel Core 5 120U onboard GPU (Device ID `0xA7AC`, Gen 12 / Raptor Lake-U)
 
-<p align="center">
-  <b>A standalone, hardware-level driver ported from Linux i915 register knowledge. Engineered from scratch to run supported graphics endpoints on hardware Apple never implemented.</b>
-</p>
+[![Build MyIntelGPU.kext](https://github.com/pongpan-bk/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS/actions/workflows/build.yml/badge.svg)](https://github.com/pongpan-bk/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS/actions/workflows/build.yml)
+[![Target OS: macOS 12+](https://img.shields.io/badge/macOS-12%2B%20(x86_64)-blue.svg)](https://www.apple.com/macos/)
+[![Binary size: ≤220 KB](https://img.shields.io/badge/binary-%E2%89%A4220%20KB-green.svg)](Makefile)
+[![Status: Experimental](https://img.shields.io/badge/status-experimental-orange.svg)](#project-status)
+
+**A hardware-level driver ported from Linux i915 register knowledge, engineered to expose the onboard graphics of a CPU Apple never shipped with a Mac — using its real PCI Device ID, with no spoofing and no FakeID.**
 
 </div>
 
@@ -26,38 +19,53 @@
 
 ## 📖 Overview
 
-**MyIntelGPU** เป็นไดรเวอร์ระบบในระดับเคอร์เนล (Kernel Extension) ขนาดกึ่งสแตนด์อโลน (Semi-Standalone) ที่ถูกสร้างขึ้นมาเพื่อขับเคลื่อนชิปกราฟิกออนบอร์ด **Intel Core 5 120U (Device ID: `0xA7AC`)** บนระบบปฏิบัติการ macOS โดยใช้วิธีพอร์ตองค์ความรู้การจัดการรีจิสเตอร์และการควบคุมบัสจากโครงสร้างไดรเวอร์ `i915` บน Linux Kernel ดั้งเดิม
+**MyIntelGPU** is a semi-standalone kernel extension (kext) that drives the onboard GPU of the **Intel Core 5 120U** (PCI Device `0xA7AC`, Vendor `0x8086`) on macOS. It was built by porting register-level and bus-control knowledge from the Linux `i915` driver stack and re-implementing the macOS side from scratch — IOService matching, GGTT/GSM initialisation, GEM buffer management, command streamers, interrupt plumbing and display diagnostics.
 
-### 🛑 No More Spoofing / No FakeID
-ความโดดเด่นที่สุดของโปรเจกต์นี้คือการทำงานด้วยกลไก **Honest Identity (ตัวตนที่แท้จริง)** ผ่านการทำไฟล์ `Info.plist` ให้เข้าไปจับคู่พอร์ตอุปกรณ์และเคลมสิทธิ์โดยตรง (IOKit Personality Matching) ด้วยค่า PCI Device ID ตรงตามซิลิคอนจริง **ทำให้ตัวไดรเวอร์สามารถโหลดและทำงานได้ทันทีที่ไดเรกทอรี `/Library/Extensions` โดยไม่ต้องพึ่งพาการ Spoof ค่าแต่อย่างใด** ส่งผลให้ระบบทำงานได้เสถียรและแม่นยำสูงสุดขอบเขตฮาร์ดแวร์
+### 🛑 No spoofing. No FakeID.
 
----
+The defining property of this driver is **honest identity**: the Info.plist matches the real PCI Device ID via standard IOKit personality matching (`IOPCIMatch = 0xa7ac8086`) and claims the device directly. The kext loads from `/Library/Extensions` with its real hardware identity — no FakeID injection, no SMBIOS spoofing to masquerade as another iGPU. That keeps the driver accurate to the silicon it actually controls.
 
-## 🛠️ โครงสร้างสถาปัตยกรรมภายใน (What's Inside)
-
-ตัวไดรเวอร์ถูกออกแบบโครงสร้างระดับ Bare-Metal แยกออกจากระบบสั่งงานสากล เพื่อควบคุมท่อสัญญาณการประมวลผลและการแสดงผลโดยตรง:
-
-*   **Memory Management:** ระบบจัดสรรและเตรียมความพร้อมหน่วยความจำผ่านกลไก GGTT/GSM Initialization, การตั้งค่า VRAM Pool ขนาดทดสอบ 4096 MB และระบบผูกสิทธิ์สัญญานโหนด GEM Buffers
-*   **Command Streamers:** ชุดควบคุมคิววงแหวนคำสั่งประมวลผลหลัก RCS (Render) และ BCS (Blitter) วิ่งตรงผ่านระบบส่งคำสั่งทางลัด Execlists (Logical Ring Context - LRC)
-*   **Interrupt Plumbing:** การต่อท่อสัญญาณขัดจังหวะระบบฮาร์ดแวร์หลัก (Gen11+ GT Interrupt Plumbing) แบบสมบูรณ์ไร้รอยต่อ
-*   **Display Diagnostics:** โหมดสแกนและดักจับเฟรมบัฟเฟอร์ (Display-State Framebuffer Snapshot) เพื่อสแกนสัญญาณพอร์ตควบคุมหน้าจอภายในของโน้ตบุ๊กโดยเฉพาะ
-
-> ⚠️ **Note:** ตัวแปรสัญลักษณ์คงที่ (Source-level constants) และข้อมูลจำเพาะทางเทคนิคบางส่วนในซอร์สโค้ดถูกบีบอัดและปิดบังเพื่อความปลอดภัยเชิงระบบ โดยไฟล์ `Info.plist` จะทำหน้าที่บรรจุค่าไบนารี Device ID ตรงตัวเพื่อใช้สู้สิทธิ์บนระบบ IOKit ของ macOS
+<p align="center">
+  <img width="1920" alt="MyIntelGPU loaded on macOS — System Information / boot log" src="https://github.com/user-attachments/assets/a070a163-16f7-4861-9894-cf361eb4cc74" />
+  <img width="1920" alt="MyIntelGPU graphics acceleration / decode pipeline proof" src="https://github.com/user-attachments/assets/d9e2b294-c212-4069-9b6b-522bc7d1e252" />
+</p>
 
 ---
 
-## 🔬 Architectural Deep-Dive & Low-Level Fixes
+## 🚦 Project Status
 
-### 1. The Silicon Reality (Alder Lake-P Roots)
-จากการสืบค้นประวัติระดับฮาร์ดแวร์ บล็อกสถาปัตยกรรมประมวลผลกราฟิก (Silicon Subsystem) ของชิป **Core 5 120U** ถูกยืนยันว่าทำงานอยู่บนสถาปัตยกรรมรากเหง้าของ **Intel Alder Lake-P (Gen 12)** ส่งผลให้ไดรเวอร์ชุดนี้สามารถแชร์โครงสร้างตารางข้อมูลพอร์ตและคอนเน็กเตอร์ ร่วมกับชุดคำสั่ง Gen 12 แบบดั้งเดิมได้ทั้งหมดอย่างแม่นยำ
+> ⚠️ **Experimental software.** This is a hobbyist kernel-level driver for hardware Apple never implemented. It can panic your machine, corrupt state, or simply not load. Read the [disclaimer](#-safety--disclaimer) before installing.
 
-### 2. การซ่อมแซมบั๊ก Bit-Shift & Memory Corruption (`0x71000013` Bug)
-ในการยิงคำสั่งประมวลผลวิดีโอระดับล่างตรงเข้าหาท่อส่ง **VCS Ring (VDBOX)** ข้ามเลเยอร์คำสั่งของ Metal และ VideoToolbox ตัวแอดเดรสหน่วยความจำ 64 บิตจะต้องส่งค่าผ่านบัฟเฟอร์คำสั่งตรงๆ โดยไม่มีการเลื่อนตำแหน่งบิต 
+| Area | State |
+|---|---|
+| Kext loads with honest Device ID matching (IOKit personality matching) | ✅ Working |
+| GGTT/GSM init, GEM buffer allocation and binding | ✅ Working |
+| RCS / BCS command streamers via Execlists (LRC) | ✅ Working |
+| Gen11+ GT interrupt plumbing | ✅ Working |
+| Display-state framebuffer snapshot / diagnostics | ✅ Working |
+| Hardware video decode (VDBOX / VCS ring, MFX command emission) | 🔶 In progress — userspace harness decodes H.264 with real MFX sequences |
+| HEVC / VP9 / AV1 decode | 🔶 Planned |
+| Metal acceleration | 🔶 Experimental — `MyIntelGPUMTLDriver.bundle` is embedded as a Metal plugin |
+| End-user install via signed GUI installer (.pkg) | ✅ `make pkg` + CI artifact; see [Installation](#-installation-for-owners-of-the-same-model) |
 
-ไดรเวอร์ตัวนี้ได้ทำการแก้ไขบั๊กตัวจัดการตำแหน่งหน่วยความจำที่ผิดพลาด (`>> 6` Bit-Shift Error) โดยเปลี่ยนมาใช้ระบบล้างเศษบิตล่าง 6 บิต เพื่อตรึงตำแหน่งแอดเดรสภาพ Luma และพื้นที่ Scratch บัฟเฟอร์ (`kScrIntra` / `kScrDeblock`) ให้ลงล็อกขอบเขต 64-byte พอดีตามข้อกำหนดสถาปัตยกรรมฮาร์ดแวร์:
+**Tested on:** Intel Core 5 120U (Raptor Lake-U) laptop, macOS 12+ (x86_64). Other CPU models with the same Gen 12 iGPU root are untested.
+
+---
+
+## 🧠 Architectural Deep-Dive & Notable Fixes
+
+### 1. The silicon reality — Alder Lake-P roots
+
+Although the Core 5 120U is marketed as Raptor Lake-U, its GPU subsystem is on the **Alder Lake-P (Gen 12)** architectural root. The driver therefore reuses Gen 12 port/connector tables and the Gen 12 command set unchanged, which is what makes an honest-identity match practical at all.
+
+### 2. The `0x71000013` bit-shift / memory-corruption fix
+
+Video decode commands are submitted straight to the **VCS ring (VDBOX)**, bypassing Metal and VideoToolbox. A 64-bit address must travel through the command buffer unshifted — yet the previous address mask used a `>> 6` shift that corrupted the Luma and scratch-buffer addresses (`kScrIntra` / `kScrDeblock`).
+
+The fix clears the low 6 bits instead, pinning the address to the 64-byte alignment the Gen 12 architecture requires:
 
 ```cpp
-// ล้างเฉพาะ 6 บิตล่างเพื่อล็อกขอบเขตแอดเดรสหน่วยความจำกราฟิก Gen 12
+// Clear only the low 6 bits to pin the Gen 12 GPU address to 64-byte bounds
 static constexpr uint64_t kMhwAddressMask = ~0x3FULL;
 
 void writeVcsRingAddress64(uint32_t *commandBuffer, size_t dwIndex, uint64_t gpuAddress) {
@@ -67,45 +75,131 @@ void writeVcsRingAddress64(uint32_t *commandBuffer, size_t dwIndex, uint64_t gpu
 }
 ```
 
-**ผลลัพธ์หลังการแก้ไข:** ระบบสามารถส่งผ่านบัฟเฟอร์วิดีโอความละเอียดสูงพิเศษ (เช่น สตรีมวิดีโอระบบ **8K HDR IMAX** บน YouTube) วิ่งตรงเข้าชิปถอดรหัสฮาร์ดแวร์ 80 EUs ได้ทันทีอย่างราบรื่น โดยไม่ทำให้โปรเซสจัดการหน้าต่างส่วนกลางอย่าง `WindowServer` เกิดอาการโหลดล้นหรือเกิดอาการหน้าจอค้าง (Poison Frame) อีกต่อไป
+**Result:** high-bitrate H.264 streams decode through the hardware VDBOX path instead of spilling onto WindowServer, eliminating the WindowServer poison-frame/stall behaviour previously observed.
+
+### 3. Defensive build discipline
+
+* `-Oz` size-first optimisation, `-ffunction-sections` / `-fdata-sections`, `-Wl,-dead_strip` — dead code is physically stripped from the binary.
+* `exported_symbols.txt` whitelist — only ~38 symbols (`_kmod_info`, `_VblankEvent`, `_vcsCmd*`) survive linking; the ~286 C++ mangled symbols are hidden at link time and removed with `strip -x`, shrinking LINKEDIT by ~18 KB.
+* Generated `MyIntelGPUVersion.h` keeps the kernel banner in lock-step with the stamped `CFBundleVersion`, so a running kext can never misreport its own version.
+* Hard size gate: the build **fails** if the binary exceeds 220,000 bytes.
 
 ---
 
-## 🏗️ วิธีการคอมไพล์และการติดตั้ง (Build & Installation)
+## 📦 Installation (for owners of the same model)
 
-### เครื่องมือที่จำเป็น (Prerequisites)
-การคอมไพล์ซอร์สโค้ดจำเป็นต้องใช้เครื่องมือ **Xcode Command Line Tools** ควบคู่กับชุดพัฒนาเคอร์เนล **MacKernelSDK** (แนะนำให้จัดวางไว้ที่โฟลเดอร์ `~/MacKernelSDK` หรือ `/opt/MacKernelSDK`)
+If you have an **Intel Core 5 120U** laptop and macOS 12+ on x86_64, the binary installer is the supported path:
 
-### ขั้นตอนการคอมไพล์ (Compiling)
+ 1. Download **`MyIntelGPU-<version>.pkg`** from the latest green CI run (Actions → *Build MyIntelGPU.kext* → most recent run → **Artifacts** → `MyIntelGPU-pkg-<version>`).
+2. Double-click it. The installer:
+   * backs up any existing `MyIntelGPU.kext` to `MyIntelGPU.kext.bak-<timestamp>`,
+   * installs to `/Library/Extensions` with `root:wheel` / `755`,
+   * rebuilds the auxiliary kernel collection (`kmutil install`).
+3. Reboot.
 
-```bash
-git clone https://github.com
-cd First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS
-make
-```
-
-
-### ขั้นตอนการติดตั้ง (Deployment)
-> 🚨 **Disclaimer:** นี่คือโค้ดระดับเคอร์เนลที่จัดการและควบคุมฮาร์ดแวร์โดยตรง การติดตั้งและรันไฟล์มีความเสี่ยงต่อตัวระบบ ผู้ใช้งานโปรดรับความเสี่ยงในการทดสอบด้วยตนเอง
+Manual install from a CI-built `MyIntelGPU.kext`:
 
 ```bash
-# 1. ตั้งค่าสิทธิ์ไฟล์ระบบให้ถูกต้องตามข้อกำหนดเคอร์เนล (Root:Wheel)
+# Kernel-level code that touches hardware directly — you run this at your own risk.
 sudo chown -R root:wheel MyIntelGPU.kext
 sudo chmod -R 755 MyIntelGPU.kext
-
-# 2. คัดลอกเข้าไดเรกทอรีส่วนขยายระบบและสั่งอัปเดตระบบแคชเคอร์เนล
 sudo cp -R MyIntelGPU.kext /Library/Extensions/
 sudo kmutil install --volume-root /
+sudo kmutil showloaded | grep MyIntelGPU   # verify
 ```
+
+---
+
+## 🛠️ Build From Source
+
+### Prerequisites
+
+* **macOS 12+** on x86_64 hardware with the target iGPU (or a CI runner)
+* **Xcode Command Line Tools** — `xcode-select --install`
+* **MacKernelSDK** — cloned to `~/MacKernelSDK` or `/opt/MacKernelSDK`
+  (<https://github.com/acidanthera/MacKernelSDK>)
+
+### Build
+
+```bash
+git clone https://github.com/pongpan-bk/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS.git
+cd First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS
+make          # builds MyIntelGPU.kext (with embedded Metal plugin)
+make pkg      # builds the installer package MyIntelGPU-<version>.pkg
+make version  # shows base / stamped version
+make sizecheck
+```
+
+The standalone kext embeds `MyIntelGPUMTLDriver.bundle` under `Contents/PlugIns/` — that bundle must travel with the kext or Metal will never resolve the plugin class.
+
+Continuous Integration builds the kext **and** the installer package on every push and on `v*` tags (see [`build.yml`](.github/workflows/build.yml)). Both artifacts (`MyIntelGPU-kext-<version>`, `MyIntelGPU-pkg-<version>`) are downloadable from the run's **Artifacts** section.
+
+---
+
+## 🗂️ Repository Layout
+
+```
+Info.plist                  kext personality + IOPCIMatch (0xa7ac8086), version 4.4.213
+Makefile                    build, size gate, pkg installer, symbol export control
+exported_symbols.txt        whitelist of symbols that survive linking
+MyIntelGPU.cpp/.hpp         IOService entry, device matching, IRQ, GGTT bring-up
+IntelFramebuffer.cpp        framebuffer service + display-state diagnostics
+MyIntelGEMBuffer.cpp        GEM buffers, GGTT binding, Gen 12 TLB invalidation
+MyIntelRing.cpp             RCS/BCS ring programming, head-retry logic
+MyIntelMedia.cpp            media engine bring-up (VDBOX / VEBOX / SFC)
+MyIntelVCS*.cpp/h           VCS ring submission, MFX command emission
+myintel_h264_parse.h        pure-C H.264 SPS/PPS/slice parser (no kernel deps)
+MyIntelEDIDParser.cpp       EDID parsing for internal panel detection
+MyIntelObfuscate.h          source-level constant / string obfuscation utilities
+MyIntelGPUMTLDriver.bundle/ Metal plugin (embedded at build time)
+test_submit_vcs.m           userspace H.264 decode harness (development proof)
+*.command                   ops runbooks (build/verify, VCS harness, audits)
+packaging/                  pkg pre/post-install scripts (backup, perms, kmutil)
+.github/workflows/build.yml CI: build kext + pkg, size gate, release on tag
+```
+
+---
+
+## ❓ FAQ
+
+**Will this work on other Intel iGPUs?**
+Only the `0xA7AC` device is matched, by design. Adding another Device ID means re-validating the Gen 12 port tables, command emission and interrupt routing for that silicon.
+
+**Does it need Lilu?**
+No. This is a pure native IOService driver — no Lilu plugin shim.
+
+**SIP?**
+As with any kext loaded from `/Library/Extensions` on modern macOS, the specifics depend on your macOS version and whether the kext is kmutil-installed. Test on a sacrificial machine first.
+
+**Why do some source constants look odd?**
+The shipped kext is produced with `-exported_symbols_list` (≈38 whitelisted symbols, the rest hidden at link time), `strip -x` at link, `-ffunction-sections`/`-fdata-sections` + `-Wl,-dead_strip`, and a 220 KB hard size gate in the Makefile — so the binary exposes almost nothing. `MyIntelObfuscate.h` ships source-level obfuscation helpers, but note: **no source file currently includes it** — string/register obfuscation is not active in the shipped kext today. The PCI match in Info.plist stays literal so IOKit can do its job.
+
+**Can I copy the source into my own driver?**
+No — see [License & Redistribution](#-license--redistribution).
+
+---
+
+## ⚠️ Safety & Disclaimer
+
+This is **kernel-level code that drives hardware directly**. Loading it can kernel-panic your machine, leave your GPU in a bad state, or make your installation unbootable. Keep a backup boot volume. **You install and run this entirely at your own risk — there is no warranty of any kind.**
+
+---
+
+## 🔒 License & Redistribution
+
+© 2026 pongpan-bk. **All rights reserved.** The binary installer (`.pkg`) may be installed and used on machines with the target GPU. Redistribution, re-hosting, source copying, de-obfuscation for republication, derivative drivers or rebadged releases are **not permitted** without written permission.
+
+*The source tree is published for transparency and review — not as a grant of rights to copy it.*
 
 ---
 
 ## 🤖 Credits & Tooling
 
-*   **Lead Developer & Hardware Analyst:** [pongpan-bk](https://github.com) - ผู้ออกแบบและวางโครงสร้างการเจาะระบบท่อส่งข้อมูลการ์ดจอ Gen 12 บน macOS
-*   **Core Engineering AI Agent:** [OpenCode AI](https://opencode.ai) - ระบบผู้ช่วยวิเคราะห์และจัดระเบียบโครงสร้างคำสั่งคิว Execlists, ตัวลงทะเบียนพอร์ตควบคุมตำแหน่งรีจิสเตอร์ และคำนวณสัญญาณท่อขัดจังหวะระบบ (End-to-End Core Synthesis)
+* **Lead developer & hardware analyst:** [pongpan-bk](https://github.com/pongpan-bk) — Gen 12 iGPU bring-up on macOS, register-level analysis, VCS/VDBOX command path.
+* **Core engineering AI agent:** [OpenCode](https://opencode.ai) — exelist/LRC command-queue organisation, register-port control analysis, and interrupt-path calculation (end-to-end synthesis).
 
 ---
+
 <div align="center">
-  Developed with ❤️ by pongpan-bk · Contact Developer via <a href="https://facebook.com">Facebook</a>
+  Developed by <b>pongpan-bk</b> · <a href="https://github.com/pongpan-bk/First-Custom-iGPU-Driver-for-Intel-Core-5-120U-on-macOS">Source on GitHub</a>
 </div>

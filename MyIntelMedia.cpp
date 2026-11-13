@@ -1,18 +1,15 @@
-/*===========================================================================
- *  MyIntelMedia.cpp
- *  Hackintosh Kext — Phase 7: Media Engines (VDBOX / VEBOX)
+/*
+ * Media engines:
+ *    1. initMediaEngines        — detect VDBOX/VEBOX availability
+ *    2. setMediaClockGating     — disable clock gating
+ *    3. publishMediaProperties  — set IORegistry properties
+ *    4. startPhase7Media        — orchestrate media startup
  *
- *  Implementation:
- *    1. initMediaEngines  — Detect VDBOX/VEBOX availability
- *    2. setMediaClockGating — Disable clock gating
- *    3. publishMediaProperties — Set IORegistry properties
- *    4. startPhase7Media — Orchestrate Phase 7
- *
- *  References:
+ * References:
  *    - Linux i915: drivers/gpu/drm/i915/gt/intel_engine_cs.c
  *    - Linux i915: drivers/gpu/drm/i915/i915_reg.h
- *    - Linux xe:   xe_media.c — media_gt_init
- *///=========================================================================
+ *    - Linux xe:   xe_media.c - media_gt_init
+ */
 
 #include "MyIntelGPU.hpp"
 #include "MyIntelMedia.hpp"

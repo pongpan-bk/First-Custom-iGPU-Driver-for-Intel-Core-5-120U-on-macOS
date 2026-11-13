@@ -1,11 +1,8 @@
-/*===========================================================================
- *  MyIntelAccelerator.cpp
- *  MyIntelGPU.kext — IOAccelerator binding (Phase 6c-Debug)
- *
- * See MyIntelAccelerator.hpp for scope. Everything here is fail-safe:
- * any sub-step failing logs and continues — accelerator creation can
- * never take down MyIntelGPU::start().
- *=========================================================================*/
+/*
+ * IOAccelerator binding implementation. See MyIntelAccelerator.hpp for scope.
+ * Fail-safe by construction: any sub-step failing logs and continues —
+ * accelerator creation can never take down MyIntelGPU::start().
+ */
 
 #include "MyIntelAccelerator.hpp"
 #include "MyIntelGPU.hpp"
@@ -194,19 +191,19 @@ bool MyIntelAccelClient::start(IOService *provider)
 
 IOReturn MyIntelAccelClient::clientClose(void)
 {
-    // [จุดที่ 1: เคลียร์ SurfaceBacking]
+    // [step 1: release SurfaceBacking]
     if (fAccel && fSurfaceID) {
         fAccel->surfaceReleaseByID(fSurfaceID);
     }
 
-    // [จุดที่ 2: ล้างแคช Ring]
+    // [step 2: clear the dirty Ring tracking]
     if (fDirtyRingMap) { fDirtyRingMap->release(); fDirtyRingMap = NULL; }
     if (fDirtyRingMD) { fDirtyRingMD->complete(); fDirtyRingMD->release(); fDirtyRingMD = NULL; }
     fDirtyRingUserVA = 0;
 
     AccelDebug("AccelClient clientClose — surface %u cleaned up", fSurfaceID);
     terminate();
-    return kIOReturnSuccess; // ยืนยันเนทีฟสิทธิ์ความสำเร็จ
+    return kIOReturnSuccess; // confirm native success grant
 }
 
 /* ── M2C: Metal device-class client (type 5) — IOAccelerator shared/device contract ──
@@ -619,7 +616,7 @@ void MyIntelAccelerator::surfaceReleaseByID(uint32_t sid)
             fSurfaces[i].backing = NULL;
             fSurfaces[i].sid = 0;
             fSurfaces[i].bytes = 0;
-            break; // เจอแล้วลบแล้วออกได้เลย
+            break; // found, removed — done
         }
     }
 

@@ -1,17 +1,14 @@
-/*===========================================================================
- *  MyIntelVCS.cpp
- *  Hackintosh Kext — VCS Engine Initialization & HuC Firmware Loading
+/*
+ * VCS Engine initialization & HuC firmware loading.
  *
- *  สร้าง 2026-10-11 — HuC firmware loading for Gen12 VDBOX
+ * Gen12 VCS requires HuC firmware for proper video decode operation.
+ * Without HuC, chroma decode produces incorrect output (U/V corr issues).
  *
- *  Gen12 VCS requires HuC firmware for proper video decode operation.
- *  Without HuC, chroma decode produces incorrect output (U/V corr issues).
- *
- *  References:
+ * References:
  *    - Linux i915: drivers/gpu/drm/i915/gt/uc/intel_huc.c
  *    - Intel PRM: HuC Authentication and Load Protocol
  *    - Intel Media Driver: media_driver/media/libva/vp/huc.cpp
- *///=========================================================================
+ */
 
 #include "MyIntelGPU.hpp"
 #include "MyIntelVCS.h"

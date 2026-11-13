@@ -1,11 +1,7 @@
-/*
- * MyIntelObfuscate.h — String encryption + register obfuscation utilities
- * Author: pongpan-bk | Tooling: OpenCode (OhMyOpenCode)
- * 
+/* String encryption + register obfuscation utilities.
  * Layer 1: XOR string encryption (runtime decryption only)
  * Layer 2: Register address obfuscation (math operations)
- * Layer 3: Compiler stripping (handled by Makefile)
- */
+ * Layer 3: Compiler stripping (handled by Makefile) */
 
 #ifndef __MY_INTEL_OBFUSCATE_H__
 #define __MY_INTEL_OBFUSCATE_H__

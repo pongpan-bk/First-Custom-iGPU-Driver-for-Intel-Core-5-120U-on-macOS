@@ -1,17 +1,14 @@
-/*===========================================================================
- *  MyIntelMedia.hpp
- *  Hackintosh Kext — Phase 7: Media Engine (VDBOX / VEBOX)
- *
- *  จัดการ Media Accelerator Engines สำหรับ Raptor Lake (Gen12.2):
+/*
+ * Media Accelerator Engines for Raptor Lake (Gen12.2):
  *    - VDBOX (VCS0-VCS3): H.264, HEVC, AV1, VP9 decode
  *    - VEBOX (VECS0-VECS1): H.264, HEVC encode
  *    - SFC (Scalable Format Converter): NV12→P010, scaling, CSC
  *
- *  อ้างอิง Linux i915:
- *    drivers/gpu/drm/i915/gt/intel_engine_cs.c — engine mmio bases
- *    drivers/gpu/drm/i915/i915_reg.h — VDBOX/VEBOX register macros
- *    drivers/gpu/drm/i915/gt/intel_gpu_commands.h — media pipeline commands
- *///=========================================================================
+ * References (Linux i915):
+ *    drivers/gpu/drm/i915/gt/intel_engine_cs.c - engine mmio bases
+ *    drivers/gpu/drm/i915/i915_reg.h - VDBOX/VEBOX register macros
+ *    drivers/gpu/drm/i915/gt/intel_gpu_commands.h - media pipeline commands
+ */
 
 #ifndef __MY_INTEL_MEDIA_HPP__
 #define __MY_INTEL_MEDIA_HPP__
@@ -24,9 +21,9 @@
  * ─────────────────────────────────────────────
  *  Codec Capability Bitmask
  *
- *  แต่ละบิตบอกว่า RPL GPU รองรับ codec ไหนบ้าง
- *  ใช้สำหรับสร้าง IOKit property dictionary
- *  ให้ VideoToolbox / AVFoundation เห็น
+ *  Each bit says which codecs the RPL GPU supports
+ *  Used to build the IOKit property dictionary
+ *  that VideoToolbox / AVFoundation can see
  *
  *  Raptor Lake (Gen12.2) typically supports:
  *    - H.264:   decode up to 4K, encode up to 4K
@@ -87,9 +84,9 @@ typedef enum {
  * ─────────────────────────────────────────────
  *  MyIntelMediaVdboxInfo
  *
- *  สถานะของ VDBOX engine แต่ละ instance
- *  (ใช้ใน initMediaEngines เพื่อ track ว่า VDBOX
- *   ไหนถูก initialize แล้วบ้าง)
+ *  Per-instance status of each VDBOX engine
+ *  (used in initMediaEngines to track which VDBOX
+ *   has been initialised already)
  *
  *  Physical MMIO mapping for the RPL-U profile (i915 engine identifiers):
  *    VCS0 @ 0x1C0000 — first enumerated VDBOX
@@ -110,7 +107,7 @@ typedef struct {
  * ─────────────────────────────────────────────
  *  MyIntelMediaVeboxInfo
  *
- *  สถานะของ VEBOX engine แต่ละ instance
+ *  Per-instance status of each VEBOX engine
  *
  *  RPL-U profile: VECS0 @ 0x1C8000 is enumerated; VECS1 @ 0x1D8000 is not.
  *  Enumeration does not imply a working command-submission path.
@@ -242,8 +239,8 @@ typedef enum {
  *  MFX Pipe Clock Gating Control
  *
  *  VDBOX instance registers (mmio_base + offset)
- *  ใช้ disable clock gating สำหรับบางหน่วยที่จำเป็น
- *  ระหว่าง media engine bringup
+ *  used to disable clock gating for selected units that are required
+ *  during media engine bring-up
  *
  *  Reference: i915 gt/intel_engine_regs.h:255 — VDBOX_CGCTL3F10,
  *             VDBOX_CGCTL3F18 (offsets relative to engine mmio_base)
@@ -264,7 +261,7 @@ typedef enum {
  * ─────────────────────────────────────────────
  *  SFC Lock/Unlock Protocol
  *
- *  ก่อนใช้ SFC ต้อง lock ก่อน:
+ *  SFC must be locked before use:
  *    1. Write 1 to SFC_LOCK
  *    2. Poll SFC_LOCK_ACK until bit set
  *    3. Use SFC

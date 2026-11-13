@@ -1,15 +1,10 @@
-/*===========================================================================
- *  MyIntelFramebuffer.hpp
- *  Hackintosh Kext ? IOFramebuffer Binding (Phase 4)
- *
- *  IOFramebuffer subclass ?????? macOS 15 Sequoia SDK
- *  Pure virtual methods ??????? implement:
+/* IOFramebuffer subclass (macOS 15 SDK).
+ * Pure virtual methods to implement:
  *    - getApertureRange(IOPixelAperture)
  *    - getPixelFormats()
  *    - getInformationForDisplayMode()
  *    - getPixelInformation()
- *    - getPixelFormatsForDisplayMode()
- *///=========================================================================
+ *    - getPixelFormatsForDisplayMode() */
 
 #ifndef __MY_INTEL_FRAMEBUFFER_HPP__
 #define __MY_INTEL_FRAMEBUFFER_HPP__

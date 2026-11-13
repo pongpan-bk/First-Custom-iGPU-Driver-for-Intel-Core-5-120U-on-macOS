@@ -1,8 +1,3 @@
-/*===========================================================================
- *  MyIntelEDIDParser.cpp
- *  Hackintosh Kext — EDID Parser Implementation (Phase 8)
- *///=========================================================================
-
 #include "MyIntelEDIDParser.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/graphics/IODisplay.h>

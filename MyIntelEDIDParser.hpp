@@ -1,10 +1,5 @@
-/*===========================================================================
- *  MyIntelEDIDParser.hpp
- *  Hackintosh Kext — EDID Parser for Display Detection (Phase 8)
- *
- *  Parses VESA EDID 1.4 + CEA-861 extension blocks
- *  No C++ STL, no exceptions, no RTTI — IOKit only
- *///=========================================================================
+/* EDID parser for display detection: parses VESA EDID 1.4 + CEA-861 extension blocks.
+ * No C++ STL, no exceptions, no RTTI — IOKit only. */
 
 #ifndef __MY_INTEL_EDID_PARSER_HPP__
 #define __MY_INTEL_EDID_PARSER_HPP__

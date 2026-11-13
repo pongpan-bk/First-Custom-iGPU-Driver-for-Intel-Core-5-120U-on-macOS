@@ -1,16 +1,13 @@
-/*===========================================================================
- *  MyIntelAccelerator.hpp
- *  MyIntelGPU.kext — IOAccelerator binding (Phase 6c)
- *
+/*
  * Opt-in diagnostic IOAccelerator service. It exposes only the private
  * diagnostic user client; it does not advertise Metal, GVA, or display-pipe
  * support because those macOS client protocols are not implemented.
  *
- * Gated by boot-arg "myintelaccel" (see MyIntelGPU.cpp Phase 6c):
+ * Gated by boot-arg "myintelaccel" (see MyIntelGPU.cpp):
  *   absent   -> nothing created (byte-identical GPU-only behavior)
  *   =1       -> attach under MyIntelGPU node
  *   =2       -> attach under the IOPCIDevice (Apple-style topology)
- *=========================================================================*/
+ */
 
 #ifndef __MY_INTEL_ACCELERATOR_HPP__
 #define __MY_INTEL_ACCELERATOR_HPP__
