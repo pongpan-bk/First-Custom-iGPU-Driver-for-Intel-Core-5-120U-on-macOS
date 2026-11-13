@@ -1,18 +1,15 @@
-/*===========================================================================
- *  MyIntelRing.cpp
- *  Hackintosh Kext — Ring Buffer Engine (Phase 5)
+/*
+ * GPU Command Ring implementation:
+ *    1. ringCreate                    — allocate GEM buffer + program engine registers
+ *    2. ringBegin / ringAdvance       — command emission
+ *    3. ringSubmit                    — RING_TAIL write = kick GPU
+ *    4. ringEmit*                     — MI command helpers
  *
- *  Implementation:
- *    1. ringCreate — alloc GEM buffer + program engine registers
- *    2. ringBegin / ringAdvance — command emission
- *    3. ringSubmit — RING_TAIL write = kick GPU
- *    4. ringEmit* — MI command helpers
- *
- *  References:
+ * References:
  *    - Linux i915: intel_ring_submission.c xcs_resume()
  *                  intel_ring.h intel_ring_begin/advance
  *    - i915_reg.h: RING_TAIL, RING_HEAD, RING_START, RING_CTL
- *///=========================================================================
+ */
 
 #include "MyIntelRing.hpp"
 #include <IOKit/IOLib.h>
@@ -215,8 +212,8 @@ MyIntelRing *ringCreate(
     cb->writeReg32(cb->context, base + RING_TAIL_REG_OFFSET, 0);
     cb->readReg32(cb->context, base + RING_TAIL_REG_OFFSET);
 
-    /* 🌟 สับลูปปั่นค่ารีไตร HEAD 50ms ปลุก Silicon Intel ให้กลืนค่าศูนย์จริงด้วยมือจารเอง! */
-    int head_retry = 50000; // 50ms (ใช้ delay ไมโครวินาที)
+    /* Retry-poll the HEAD register for 50ms until the zero write sticks */
+    int head_retry = 50000; // 50ms (microsecond delay)
     while (head_retry-- > 0) {
         cb->writeReg32(cb->context, base + RING_HEAD_REG_OFFSET, 0);
         if ((cb->readReg32(cb->context, base + RING_HEAD_REG_OFFSET) & 0xFFFFFFFC) == 0) break;

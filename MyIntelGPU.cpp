@@ -12,32 +12,26 @@
 #define DEC_BUFFER_GPUClient "MyIntelGPUClient"
 #endif
 
-/*===========================================================================
- *  MyIntelGPU.cpp
- *  Hackintosh Kext — FakeID Alder Lake → Coffee Lake
- *
- * Implementation MyIntelGPU
- *
- * :
+/*
+ * Implementation notes:
  *    - PCI Initialization (i915_pci_probe counterpart)
  *    - MMIO BAR mapping (i915_driver_mmio_probe counterpart)
- * - Dynamic Register Translation — macOS
- * register I/O real hardware
+ *    - Dynamic register translation — macOS register I/O to real hardware
  *    - GGTT TLB flush + CPU cache coherency
  *
- *  Reference:
+ * References:
  *    Linux i915:
- *      i915_driver.c       → i915_driver_mmio_probe, i915_driver_hw_probe
- *      i915_pci.c          → i915_pci_probe, pciidlist
- *      intel_uncore.c      → intel_uncore_read, intel_uncore_write
- *      i915_gem.c          → GGTT, aperture, GEM object lifecycle
- *      intel_engine_cs.c   → engine MMIO base definition
+ *      i915_driver.c       i915_driver_mmio_probe, i915_driver_hw_probe
+ *      i915_pci.c          i915_pci_probe, pciidlist
+ *      intel_uncore.c      intel_uncore_read, intel_uncore_write
+ *      i915_gem.c          GGTT, aperture, GEM object lifecycle
+ *      intel_engine_cs.c   engine MMIO base definition
  *
  *    macOS IOKit:
  *      IODeviceMemory, IOMemoryMap
  *      IOPCIDevice API
  *      OSSynchronizeIO / OSMemoryBarrier / IODelayWriteCombined
- *///=========================================================================
+ */
 
 #include "MyIntelGPU.hpp"
 #include "MyIntelGPUClient.hpp"
@@ -906,8 +900,8 @@ uint32_t MyIntelGPU::translateAddress(uint32_t fakeOffset)
         return fakeOffset;
     }
 
-    /* 🚨 แก้ทาง: บังคับยอมให้คำสั่งช่วงแอดเดรส Global MMIO (0x190000 - 0x19FFFF) 
-     * ของชิปยุคใหม่ ทะลุผ่านตัวแปลไปหาฮาร์ดแวร์ตรงๆ โดยไม่โดนสูตรแปลงค่า Coffee Lake เก่าเตะทิ้ง
+    /* Force-allow the new-silicon Global MMIO address range (0x190000 - 0x19FFFF)
+     * to pass through to the hardware untouched, instead of being dropped by the legacy Coffee Lake translation formula
      *  covers: GT interrupt regs, BT killer, flash cache */
     if (fakeOffset >= 0x190000 && fakeOffset <= 0x19FFFF) {
         return fakeOffset;
@@ -4484,7 +4478,7 @@ bool MyIntelGPU::forceWakeGet(void)
 {
     if (!fRegs || !isValidRegs()) return false;
 
-    /* 2.0.229 (ปฏิบัติการแหกตำรา, CRITICAL #2): IRQ-path fast path — the
+    /* 2.0.229 (IRQ-path fast path, CRITICAL #2): the
      * engine that raised USER IRQ just executed commands, so it is awake by
      * definition. i915 gen11_gt_irq_handler() never calls forcewake; poll
      * the ACK once (no retry rounds, no 1ms inter-round delay) and defer on
@@ -6312,7 +6306,7 @@ void MyIntelGPU::processEngineInterrupt(uint32_t bank)
     }
 
     /*
-     * 2.0.229 (ปฏิบัติการแหกตำรา): mirror i915 gen11_gt_bank_handler()
+     * 2.0.229 (IRQ overhaul): mirror i915 gen11_gt_bank_handler()
      * exactly — serve each set bit via its OWN IIR selector write.
      *
      * Old code wrote the whole intr_dw to GEN11_IIR_REG_SELECTOR once and

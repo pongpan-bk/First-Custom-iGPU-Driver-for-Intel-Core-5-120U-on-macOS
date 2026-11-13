@@ -1,22 +1,17 @@
-/*===========================================================================
- *  MyIntelVCS.h
- *  Hackintosh Kext — Video Codec Service (VCS) Register Definitions
- *
- *  สร้าง 2026-08-19 — Phase 7a: VCS Hardware Registers
- *
- *  กำหนด register map สำหรับ Intel Gen12+ VCS (Video Codec Service) engine:
+/*
+ * Register map for the Intel Gen12+ VCS (Video Codec Service) engines:
  *    - VCS0 (Video Decode): MMIO base 0x1C0000
  *    - VCS1 (Video Decode): MMIO base 0x1D0000
  *    - VECS0 (Video Encode): MMIO base 0x1C8000
  *
- *  ใช้สำหรับ hardware H.264/HEVC video decode โดยไม่ต้องผ่าน Metal
+ * Used for hardware H.264/HEVC video decode without going through Metal
  *
- *  อ้างอิง:
+ * References:
  *    - Intel PRM Vol 2c — VCS/VDBox registers
  *    - Linux i915: drivers/gpu/drm/i915/gt/intel_engine_regs.h
  *    - Linux i915: drivers/gpu/drm/i915/gt/uc/intel_huc.c
  *    - Intel Media Driver: media_driver/linux/ult/hw/mhw_vdbox_hcp_g12_X.cpp
- *///=========================================================================
+ */
 
 #ifndef __MY_INTEL_VCS_H__
 #define __MY_INTEL_VCS_H__

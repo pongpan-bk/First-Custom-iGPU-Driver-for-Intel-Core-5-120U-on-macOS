@@ -1,21 +1,18 @@
-/*===========================================================================
- *  myintel_vcs_user.h
- *  User-space ABI for MyIntelVCSClient (IOUserClient)
+/*
+ * User-space ABI for MyIntelVCSClient (IOUserClient).
  *
- *  สร้าง 2026-08-21 — Phase 9: GEM Buffer Allocation + Player Bridge
- *
- *  Single source of truth for the user<->kernel contract:
+ * Single source of truth for the user<->kernel contract:
  *    - externalMethod() selectors
  *    - clientMemoryForType() type encoding for GEM CPU mapping
  *    - GEM buffer flags
  *
- *  Shared by:
+ * Shared by:
  *    - kext       : MyIntelVCSClient.cpp
  *    - test app   : test_submit_vcs.m
  *    - dylib      : myintelvcs_bridge.c (FFmpeg / custom player bridge)
  *
- *  Pure C header — no kernel includes, safe in user-space.
- *///=========================================================================
+ * Pure C header — no kernel includes, safe in user-space.
+ */
 
 #ifndef __MYINTEL_VCS_USER_H__
 #define __MYINTEL_VCS_USER_H__

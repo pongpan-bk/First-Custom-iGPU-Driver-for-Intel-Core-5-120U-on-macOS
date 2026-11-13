@@ -1,21 +1,16 @@
-/*===========================================================================
- *  MyIntelGPU.hpp
- *  Hackintosh Kext — FakeID Alder Lake → Coffee Lake
- *
- * Intel Graphics Driver macOS (IOKit C++)
- * :
- * - PCI BAR0 (MMIO Registers) + BAR2 (Aperture/GMADR)
- * - Dynamic Register Offset Translation: MMIO base engine
- * cursor register macOS ( Coffee Lake)
- * Alder Lake
- * - CPU memory barrier + cache flush GPU coherency
+/*
+ * Intel graphics driver for macOS (IOKit C++).
+ *   - PCI BAR0 (MMIO Registers) + BAR2 (Aperture/GMADR)
+ *   - Dynamic register offset translation: MMIO base per engine,
+ *     cursor registers on macOS (Coffee Lake) vs Alder Lake
+ *   - CPU memory barrier + cache flush for GPU coherency
  *
  * Linux i915:
- *    drivers/gpu/drm/i915/i915_pci.c        — PCI ID table + per-gen info
- *    drivers/gpu/drm/i915/intel_device_info.c — GMD_ID runtime detection
- *    drivers/gpu/drm/i915/gt/intel_engine_cs.c — engine MMIO base per gen
- *    drivers/gpu/drm/i915/i915_drv.c        — i915_driver_mmio_probe / hw_probe
- *///=========================================================================
+ *    drivers/gpu/drm/i915/i915_pci.c        PCI ID table + per-gen info
+ *    drivers/gpu/drm/i915/intel_device_info.c GMD_ID runtime detection
+ *    drivers/gpu/drm/i915/gt/intel_engine_cs.c engine MMIO base per gen
+ *    drivers/gpu/drm/i915/i915_drv.c        i915_driver_mmio_probe / hw_probe
+ */
 
 #ifndef __MY_INTEL_GPU_HPP__
 #define __MY_INTEL_GPU_HPP__

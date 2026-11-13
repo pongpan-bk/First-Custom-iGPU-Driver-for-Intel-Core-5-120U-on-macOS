@@ -10,7 +10,8 @@ echo "  10-full-audit — Complete Audit"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================"
 
-DIR="/Users/ppbk/Desktop/เทส/new"
+# Directory holding the numbered .command audit scripts (this repo's root)
+DIR="${DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 for f in 01-build-verify 02-preflight 03-install-verify 04-runtime-health \
          05-media-engines 06-irq-interrupt 07-display-edid 08-log-forensics; do

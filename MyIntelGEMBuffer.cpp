@@ -1,24 +1,21 @@
-/*===========================================================================
- *  MyIntelGEMBuffer.cpp
- *  Hackintosh Kext — GEM Buffer Object Manager (Phase 5 - Gen12 Fix)
+/*
+ * GEM Buffer Object manager.
+ *    - IOMallocAligned() allocates pages (per-page phys resolved into pagesPhys[])
+ *    - PTE write into GSM (GTT Stolen Memory)
+ *    - GGTT TLB invalidate via writeReg32(GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN)
  *
- * work:
- *    - IOMallocAligned → pages (per-page phys resolved into pagesPhys[])
- *    - PTE write → GSM (GTT Stolen Memory)
- *    - GGTT TLB invalidate → writeReg32(GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN)
- *
- * Physical memory allocation kext:
- * IOMallocAligned(size, alignment) —
- * Physical Address kvtophys() IOGetPhysicalAddress
- * ( API MacKernelSDK → IOMemoryDescriptor )
+ * Physical memory inside the kext:
+ * IOMallocAligned(size, alignment) returns a CPU virtual address; the physical
+ * address comes from kvtophys() / IOGetPhysicalAddress (MacKernelSDK API), or
+ * from an IOMemoryDescriptor.
  *
  * Strategy:
- *    1. IOMallocAligned() → cpu virtual address
- *    2. IOMemoryDescriptor::withAddress(kernel_task) → map physical
- *    3. physical address IOMemoryDescriptor::prepare() + getPhysicalSegment()
+ *    1. IOMallocAligned()                            -> cpu virtual address
+ *    2. IOMemoryDescriptor::withAddress(kernel_task)  -> map physical
+ *    3. physical addr via IOMemoryDescriptor::prepare() + getPhysicalSegment()
  *
- * : Linux i915 — i915_gem_gtt.c
- *///=========================================================================
+ * Reference: Linux i915 - i915_gem_gtt.c
+ */
 
 #include "MyIntelGEMBuffer.hpp"
 #include <IOKit/IOLib.h>
@@ -361,7 +358,7 @@ bool ggttUnbindExternalPages(
     return true;
 }
 
-/* 🚨 แก้ปมส้นตีน: อัปเกรดตัวล้างแคช (TLB Invalidate) ให้รองรับสถาปัตยกรรม Gen 12 อ้างอิงตาม Linux XE driver */
+/* Upgrade the cache-flush (TLB invalidate) path for the Gen 12 architecture, per the Linux XE driver */
 void gemBufferGGTTInvalidate(
     WriteReg32Func writeReg32Func,
     void          *context,
@@ -371,11 +368,11 @@ void gemBufferGGTTInvalidate(
 
     GEM_TRACE("gemBufferGGTTInvalidate: Gen12 Force-Flush Triggered offset=0x%X", ggttInvalidOffset);
     
-    /* โค้ดลีนุกซ์ XE/i915 สำหรับชิปยุคใหม่: การล้างตาราง GGTT ต้องยิงแฟล็กสลับบิต 
-     * บังคับเปิดบิตเปิดฟังก์ชัน (Bit 0 = 1) เพื่อถล่มแคชระบบแอนิเมชันให้ยอมโหลดใหม่ */
+    /* Linux XE/i915 for modern chips: flushing the GGTT table requires the toggle flag
+     * forcing the enable bit (Bit 0 = 1) so the IOTLB/cache lets go of the mapping */
     writeReg32Func(context, ggttInvalidOffset, 1); 
     
-    /* ยิงซ้ำเพื่อเสถียรภาพสถาปัตยกรรม (Double-Wall Sync) */
+    /* issue twice for architectural stability (Double-Wall Sync) */
     OSSynchronizeIO();
 }
 
@@ -416,7 +413,7 @@ uint32_t gemBufferFindFreeRegion(
     return 0;
 }
 
-/* 🚨 ซ่อมส่วนท้ายไฟล์ที่ถูกตัดขาดให้สมบูรณ์เรียบร้อย */
+/* Clear the trailing PTE range to keep the file section complete */
 void gemBufferClearPTEs(
     uint32_t *gsmPtr,
     uint32_t  startPage,
@@ -430,7 +427,7 @@ void gemBufferClearPTEs(
         gsm64[startPage + i] = 0;
     }
     
-    /* บังคับเคลียร์กระแสข้อมูลฝั่งซีพียูหลังล้างค่าตาราง */
+    /* force CPU-side data coherency after clearing the table entries */
     OSSynchronizeIO();
 }
 

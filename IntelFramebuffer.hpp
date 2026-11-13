@@ -1,19 +1,13 @@
-/*===========================================================================
- *  IntelFramebuffer.hpp
- *  Hackintosh Kext — Display Output & Interrupt Management
- *
- * Display Pipeline, Vblank Interrupt,
- * Framebuffer Output MyIntelGPU
- * responsibility
- *
- * MyIntelGPU* parent MMIO ( getRegs(),
- * getMMIOMap(), readReg32/writeReg32) IOPCIDevice
- * Interrupt
+/*
+ * Display pipeline, VBlank interrupt and framebuffer output for MyIntelGPU.
+ * Owns the IOFramebuffer responsibility.
+ * Reached MMIO through the MyIntelGPU parent (getRegs(), getMMIOMap(),
+ * readReg32/writeReg32) on the IOPCIDevice.
  *
  * Linux i915:
  *    drivers/gpu/drm/i915/display/intel_display.c
  *    drivers/gpu/drm/i915/i915_irq.c
- *///=========================================================================
+ */
 
 #ifndef __INTEL_FRAMEBUFFER_HPP__
 #define __INTEL_FRAMEBUFFER_HPP__

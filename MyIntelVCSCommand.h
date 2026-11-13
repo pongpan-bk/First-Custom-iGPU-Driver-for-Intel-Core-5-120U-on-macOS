@@ -149,7 +149,7 @@ bool vcsCmdWaitMedia(MyIntelVCSCmdBuf *buf);
 /*
  * ─── VEBOX Encode — H.264 / HEVC encode via VEBOX ──────────────────────
  *  VECS0 @ 0x1C8000, VECS1 @ 0x1D8000
- *  รองรับ H.264 encode (8-bit/10-bit 4K) และ HEVC encode (8-bit/10-bit 4K)
+ *  H.264 encode (8-bit/10-bit 4K) and HEVC encode (8-bit/10-bit 4K)
  */
 bool vcsCmdVeboxInit(MyIntelVCSCmdBuf *buf);
 bool vcsCmdVeboxPictureStart(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height,
@@ -176,8 +176,8 @@ bool vcsCmdVc1PicState(MyIntelVCSCmdBuf *buf, uint32_t width, uint32_t height);
 
 /*
  * ─── Phase 10 — Gen12-accurate MFX AVC decode sequence ───────────
- *  อ้างอิง layout จริงจาก mhw_vdbox_mfx_hwcmd_g12_X.h (Intel media-driver)
- *  DW0 opcodes คำนวณจาก codegen enums:
+ *  Layout follows mhw_vdbox_mfx_hwcmd_g12_X.h (Intel media-driver)
+ *  DW0 opcodes computed from codegen enums:
  *    PIPE_MODE_SELECT  0x70000004  (5  dwords)
  *    SURFACE_STATE     0x70010005  (6  dwords)
  *    PIPE_BUF_ADDR     0x70020043  (68 dwords)

@@ -1,26 +1,19 @@
-/*===========================================================================
- *  MyIntelGEMBuffer.hpp
- *  Hackintosh Kext — GEM Buffer Object Manager (Phase 5)
+/*
+ * Buffer Objects and GGTT:
+ *    - allocateBuffer(): physical pages + GGTT PTE
+ *    - bindToGGTT():     PTE into GSM (GTT Stolen Memory)
+ *    - unbindFromGGTT(): PTE teardown + TLB invalidate
+ *    - freeBuffer():     release pages
  *
- * Buffer Objects GGTT:
- * - allocateBuffer(): physical pages + GGTT PTE
- * - bindToGGTT(): PTE GSM (GTT Stolen Memory)
- * - unbindFromGGTT(): PTE + TLB invalidate
- * - freeBuffer(): pages
- *
- *  GGTT PTE Format (Xe / Gen12+):
- *    63  53 52  51      12  11   1  0
- *   ┌───┬───┬──────────┬────┬───┬───┐
- *   │ 0 │PAT│ PhysAddr │ 0  │DM │ V │
- *   └───┴───┴──────────┴────┴───┴───┘
- *     bit 0     = Valid / Present (XE_PAGE_PRESENT)
- *     bit 1     = Device Memory (XE_GGTT_PTE_DM)
+ *  GGTT PTE format (Xe / Gen12+):
+ *     bit 0      = Valid / Present (XE_PAGE_PRESENT)
+ *     bit 1      = Device Memory (XE_GGTT_PTE_DM)
  *     bits 12-51 = Physical Address >> 12 (XE_PTE_ADDR_MASK)
- *     bit 52    = PAT index bit 0 (XELPG_GGTT_PTE_PAT0)
- *     bit 53    = PAT index bit 1 (XELPG_GGTT_PTE_PAT1)
+ *     bit 52     = PAT index bit 0 (XELPG_GGTT_PTE_PAT0)
+ *     bit 53     = PAT index bit 1 (XELPG_GGTT_PTE_PAT1)
  *
- *  Reference: Linux XE driver — xe_gtt_defs.h, xe_ggtt.c
- *///=========================================================================
+ * Reference: Linux XE driver - xe_gtt_defs.h, xe_ggtt.c
+ */
 
 #ifndef __MY_INTEL_GEM_BUFFER_HPP__
 #define __MY_INTEL_GEM_BUFFER_HPP__

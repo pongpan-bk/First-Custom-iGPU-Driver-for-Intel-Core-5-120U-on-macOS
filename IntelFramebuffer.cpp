@@ -1,23 +1,17 @@
-/*===========================================================================
- *  IntelFramebuffer.cpp
- *  Hackintosh Kext — Display Output & Interrupt Management Implementation
+/*
+ * Display output & interrupt management implementation.
  *
- * :
- *    - Interrupt Initialization (clear → mask → enable)
- * - Vblank Interrupt Registration IOInterruptEventSource
- *    - Pipe Management
- *
- * Interrupt Lifecycle:
- * 1. initInterrupts() — Mask + Clear Register
- * 2. installInterruptHandlers() — IOInterruptEventSource
- * 3. enableVblankInterrupt() — Vblank IER
- * 4. handleInterrupt() — Callback Interrupt
- * 5. disableInterrupts() — + unload
+ * Interrupt lifecycle:
+ * 1. initInterrupts()             Mask + clear registers
+ * 2. installInterruptHandlers()   IOInterruptEventSource
+ * 3. enableVblankInterrupt()      VBlank IER
+ * 4. handleInterrupt()            Interrupt callback
+ * 5. disableInterrupts()          Disable + unload
  *
  * Linux i915:
- *    drivers/gpu/drm/i915/i915_irq.c — icl_irq_handler, gen8_irq_handler
+ *    drivers/gpu/drm/i915/i915_irq.c - icl_irq_handler, gen8_irq_handler
  *    drivers/gpu/drm/i915/display/intel_display_power.c
- *///=========================================================================
+ */
 
 #include "IntelFramebuffer.hpp"
 

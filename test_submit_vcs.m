@@ -1,25 +1,22 @@
-/*===========================================================================
- *  test_submit_vcs.m
- *  Phase 10 — Full MFX Decode Test App (Gen12 AVC, parsed bitstream)
+/*
+ * MFX Decode Test App (Gen12 AVC, parsed bitstream).
  *
- *  อัปเกรดจาก Phase 9 (template commands):
- *    1. เปิดไฟล์ .h264/.264/.annexb จริง (Annex-B)
- *    2. Parse SPS / PPS / slice header จริง (myintel_h264_parse.h)
- *    3. จองบัฟเฟอร์ผ่าน GEM: Source (bitstream) + Destination (NV12)
+ * Upgraded from the template-command version:
+ *    1. Open a real .h264/.264/.annexb file (Annex-B)
+ *    2. Parse real SPS / PPS / slice header (myintel_h264_parse.h)
+ *    3. Allocate GEM buffers: Source (bitstream) + Destination (NV12)
  *       + Scratch (row stores) + Reference + Direct-MV/temporal
- *    4. สร้าง Gen12 MFX sequence ครบชุดต่อเฟรม (เฟรมแรก = IDR):
+ *    4. Emit the full Gen12 MFX sequence per frame (first frame = IDR):
  *         PIPE_MODE_SELECT → SURFACE_STATE → PIPE_BUF_ADDR → IND_OBJ
  *         → AVC_IMG_STATE → DIRECTMODE → (SLICE_STATE + BSD_OBJECT)/slice
  *         → FLUSH_MEDIA
- *    5. ส่งผ่าน Selector 6 (kSubmitVCSWorkload) ให้ VDBOX decode จริง
- *    6. อ่าน Destination Surface กลับมาพิสูจน์ว่า HW เขียนพิกเซล
+ *    5. Submit via Selector 6 (kSubmitVCSWorkload) so VDBOX decodes for real
+ *    6. Read the Destination Surface back to prove HW wrote the pixels
  *
  *  Usage:
  *    ./test_submit_vcs [file.h264] [out.nv12]
- *      ไม่มี arg = โหมด dummy เดิม (regression ของ Phase 8)
- *
- *  Author: pongpan-bk | Tooling: Qoder
- *///=========================================================================
+ *      no args = original dummy mode (Phase 8 regression)
+ */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -41,7 +38,7 @@ typedef struct {
     int      found;
 } NalScan;
 
-/* หา start code ถัดไปที่ p[i..] (3- หรือ 4-byte) ; คืนค่าความยาว start code */
+/* find the next start code at p[i..] (3- or 4-byte) ; returns the start-code length */
 static size_t startCodeAt(const uint8_t *p, size_t len, size_t i)
 {
     if (i + 2 >= len) return 0;
@@ -154,7 +151,7 @@ int main(int argc, char *argv[])
     printf("[CONTEXT] mmioBase=0x%llX ringGgtt=0x%llX ringSize=%llX kr=0x%X\n",
            sOut[0], sOut[1], sOut[2], kr);
 
-    /* ── โหลด bitstream จริง (ถ้ามี) ── */
+    /* ── load real bitstream (if any) ── */
     uint8_t *bit = NULL;
     long     bitLen = 0;
     NalScan  nal = {0};
@@ -166,7 +163,7 @@ int main(int argc, char *argv[])
         bitLen = ftell(f);
         fseek(f, 0, SEEK_SET);
         if (bitLen <= 0) { printf("FATAL: %s empty\n", bitPath); fclose(f); goto done; } // Added comment to prevent accidental modification of goto label
-        if (bitLen > 1024 * 1024) bitLen = 1024 * 1024; /* cap 1MB ต่อรอบทดสอบ */
+        if (bitLen > 1024 * 1024) bitLen = 1024 * 1024; /* cap 1MB per test run */
         bit = (uint8_t *)malloc((size_t)bitLen);
         bitLen = (long)fread(bit, 1, (size_t)bitLen, f);
         fclose(f);
@@ -176,18 +173,18 @@ int main(int argc, char *argv[])
         printf("[NAL] SPS=%u PPS=%u IDR=%u nonIDR=%u other=%u firstNAL@%zu\n",
                nal.sps, nal.pps, nal.idr, nal.nonidr, nal.other, nal.firstNalOffset);
         if (!nal.found) {
-            printf("WARN: ไม่เจอ Annex-B start code — ส่งทั้งไฟล์แบบ raw\n");
+            printf("WARN: no Annex-B start code found — sending the file as raw\n");
         }
     } else {
-        printf("[BITSTREAM] ไม่มีไฟล์ — โหมด dummy (Phase 8 regression)\n");
+        printf("[BITSTREAM] no file — dummy mode (Phase 8 regression)\n");
     }
 
-    /* ── Phase 10: parse SPS / PPS / slice header ของเฟรมแรก (IDR) ── */
+    /* ── Phase 10: parse SPS / PPS / slice header of the first frame (IDR) ── */
     H264SPS      sps;
     H264PPS      pps;
     H264SliceHdr sh;
-    /* [P13] multi-slice frame support: IDR @77+@220 = 2 slices/เฟรม — ส่งครบทุก slice
-     * ไม่งั้น VDBOX รอ MBs ที่เหลือไม่มีมา → เฟรมไม่จบ → status/pixel เงียบตลอดกาล */
+    /* [P13] multi-slice frame support: IDR @77+@220 = 2 slices/frame — submit every slice
+     * otherwise VDBOX waits for MBs that never arrive → frame never finishes → status/pixel silent forever */
 #define MAX_FRAME_SLICES 4
     struct {
         uint32_t firstMb, nalOff, nalLen, hdrBytes, bitOff;
@@ -248,7 +245,7 @@ int main(int argc, char *argv[])
                     fsl[nFsl].refL0      = shTmp.numRefIdxL0Active;
                     fsl[nFsl].refL1      = shTmp.numRefIdxL1Active;
                     fsl[nFsl].sliceType  = shTmp.sliceType;
-                    if (nFsl == 0) {          /* ตัวแรกคง interface เดิมไว้ */
+                    if (nFsl == 0) {          /* first slice keeps the legacy interface */
                         sh = shTmp;
                         sliceNalOff  = fsl[0].nalOff;
                         sliceNalType = (uint32_t)ntype;
@@ -257,7 +254,7 @@ int main(int argc, char *argv[])
                     nFsl++;
                 }
             } else if (nFsl > 0) {
-                break;   /* NAL ที่ไม่ใช่ slice หลังเริ่มเก็บ = จบเฟรม */
+                break;   /* non-slice NAL after slices began = end of frame */
             }
         }
 
@@ -276,16 +273,16 @@ int main(int argc, char *argv[])
                    26 + pps.picInitQpMinus26 + sh.sliceQpDelta,
                    sh.sliceHeaderBytes, sh.sliceDataBitOffset % 8, sliceNalOff);
         } else {
-            printf("[PARSE] ไม่ครบ SPS(%d)/PPS(%d)/slice(%d) → ใช้ template mode เดิม\n",
+            printf("[PARSE] incomplete SPS(%d)/PPS(%d)/slice(%d) -> using old template mode\n",
                    haveSps, havePps, haveSlice);
         }
     }
 
-    /* ── [FHD-CROP] dW/dH = MB aligned (1088) ไว้จองบัฟเฟอร์, แต่ SurfaceState ต้องใช้ crop จริง (1080) */
+    /* [FHD-CROP] dW/dH = MB aligned (1088) for the buffer allocation, but SurfaceState needs the true crop (1080) */
     cropW = (haveSps && sps.valid) ? sps.width  : dW;
     cropH = (haveSps && sps.valid) ? sps.height : dH;
-    pitch    = (dW + 127) & ~127u;          /* MFX: pitch align 128B (ใช้ dW aligned) */
-    surfSize = pitch * dH * 3 / 2;          /* จองเผื่อ 1088 ไว้ก่อน */
+    pitch    = (dW + 127) & ~127u;          /* MFX: pitch align 128B (uses aligned dW) */
+    surfSize = pitch * dH * 3 / 2;          /* allocate for 1088 to be safe */
 
     srcHandle = 0; srcGgtt = 0; srcSize = 0;
     dstHandle = 0; dstGgtt = 0; dstSize = 0;
@@ -322,7 +319,7 @@ int main(int argc, char *argv[])
            mvHandle, mvGgtt, mvSize, kr, kr == KERN_SUCCESS ? "OK" : "FAIL");
     if (kr != KERN_SUCCESS) goto done;
 
-    /* map เข้า user-space แล้ว copy bitstream จริงลง Source Buffer */
+    /* map into user-space then copy the real bitstream into the Source Buffer */
     kr = gemMap(conn, srcHandle, &srcVA, &srcMapSz);
     printf("[MAP] Source VA=%p size=%zu kr=0x%X\n", srcVA, srcMapSz, kr);
     if (kr != KERN_SUCCESS) goto done;
@@ -345,24 +342,24 @@ int main(int argc, char *argv[])
     } else {
         memset(srcVA, 0, srcMapSz);
     }
-    /* poison ทั้ง surface ด้วย 0xA5 — แยก 3 กรณีตอนอ่านกลับ:
-     *   ยังเป็น 0xA5  = VDBOX ไม่ได้เขียนเลย (state/address ผิด)
-     *   กลายเป็น 0    = VDBOX เขียนจริงแต่ decode ได้ดำ (coherency ใช้ได้)
-     *   เป็นพิกเซลอื่น = decode สำเร็จ */
+    /* poison the whole surface with 0xA5 — three cases at read-back:
+     *   still 0xA5  = VDBOX never wrote (state/address wrong)
+     *   became 0    = VDBOX really wrote but decoded black (coherency OK)
+     *   other       = decode succeeded */
     memset(dstVA, 0xA5, dstMapSz);
     memset(scrVA, 0, scrMapSz);   /* row stores, BSP/MPR, and MB status must start zeroed */
     memset(refVA, 0xC3, refMapSz);
     memset(mvVA,  0x3C, mvMapSz);
 
     /* ── Address-space probe v3 (2.0.251): staged experiments + engineReset ──
-     * MI_FLUSH_DW encoding ตรง i915 แท้ๆ (0x33004006) ยังโดน VDBOX ปัด (ESR=1)
-     * → แยกสาเหตุเป็นขั้นๆ โดย reset engine ระหว่างขั้น (selector 10) ไม่ต้องรีบูต:
-     *   S1: NOOP+BB_END          — baseline: ring fetch + ctx restore ใช้ได้?
-     *   S2: MI_FLUSH_DW STORE_INDEX → PPHWSP scratch (รูปแบบเดียวกับ breadcrumb จริง)
+     * MI_FLUSH_DW encoding matching real i915 (0x33004006) still got bounced by VDBOX (ESR=1)
+     * → isolate the cause step by step, resetting the engine between steps (selector 10), no reboot:
+     *   S1: NOOP+BB_END          — baseline: is ring fetch + ctx restore working?
+     *   S2: MI_FLUSH_DW STORE_INDEX → PPHWSP scratch (same breadcrumb shape as the real one)
      *   S3: MI_FLUSH_DW WriteImmData, DAT(DW1 bit2)=1 → GGTT (gen125.xml spec!)
      *   S4: MI_FLUSH_DW WriteImmData, DAT=0 → identity-map PPGTT
-     *   ⚠ บทเรียน 5whys: "USE_GTT" ไม่ใช่บิต DW0 — เป็น DW1 bit2 ตาม gen125.xml
-     *      encoding เดิม (0x13004006 + addr ไม่มี bit2) = PPGTT write โดยบังเอิญ */
+     *   WARNING (5whys lesson): "USE_GTT" is NOT a DW0 bit — it is DW1 bit2 per gen125.xml
+     *      old encoding (0x13004006 + addr without bit2) = accidental PPGTT write */
     {
         uint32_t pr[16];
         uint32_t pn;
@@ -377,25 +374,25 @@ int main(int argc, char *argv[])
         } while (0)
 
         #define DO_SUBMIT(tag) do { \
-            while (pn & 3) pr[pn++] = 0; /* MI_NOOP pad — kext reject size ไม่ 16B-aligned (kr=0xE00002C2) */ \
+            while (pn & 3) pr[pn++] = 0; /* MI_NOOP pad — kext rejects non 16B-aligned size (kr=0xE00002C2) */ \
             sOutCnt = 0; \
             kr = IOConnectCallMethod(conn, kMyVCSSubmitVCSWorkload, NULL, 0, pr, pn * 4, sOut, &sOutCnt, NULL, NULL); \
             printf("[PROBE %s] submit kr=0x%X\n", tag, kr); \
             usleep(100000); \
         } while (0)
 
-        /* [S0] reset: ล้าง halt ค้าง (ถ้ามี) + diag */
+        /* [S0] reset: clear any stuck halt + diag */
         DO_RESET("S0");
 
-        /* [S1] safe baseline: MI_NOOP×12 + BB_END — ห้าม error เด็ดขาด */
+        /* [S1] safe baseline: MI_NOOP×12 + BB_END — must not error, period */
         pn = 0;
         for (int i = 0; i < 12; i++) pr[pn++] = 0;   /* MI_NOOP */
         pr[pn++] = 0x05000000;                        /* MI_BATCH_BUFFER_END */
         pr[pn++] = 0; pr[pn++] = 0; pr[pn++] = 0;
         DO_SUBMIT("S1 noop");
         DO_RESET("S1");
-        if (ro[0] == 0) printf("[S1] => NOOP/BB_END รอด ESR=0 — ring fetch + ctx restore ใช้ได้\n");
-        else printf("[S1] => ESR=0x%X แม้แต่ NOOP! — context restore พัง\n", (uint32_t)ro[0]);
+        if (ro[0] == 0) printf("[S1] => NOOP/BB_END survived ESR=0 — ring fetch + ctx restore OK\n");
+        else printf("[S1] => ESR=0x%X even for NOOP! — context restore broken\n", (uint32_t)ro[0]);
 
         /* [S2] MI_FLUSH_DW|STOREDW|STORE_INDEX → PPHWSP scratch 0x800 */
         pn = 0;
@@ -408,11 +405,11 @@ int main(int argc, char *argv[])
         pr[pn++] = 0; pr[pn++] = 0; pr[pn++] = 0;
         DO_SUBMIT("S2 hwsp");
         DO_RESET("S2");
-        if (ro[5] == 0x77777777) printf("[S2] => MI_FLUSH_DW STORE_INDEX สำเร็จ! MI_FLUSH_DW ถูกกฎหมายบน VDBOX\n");
-        else printf("[S2] => scratch=0x%08X (คาด 0x77777777) ESR=0x%X\n", (uint32_t)ro[5], (uint32_t)ro[0]);
+        if (ro[5] == 0x77777777) printf("[S2] => MI_FLUSH_DW STORE_INDEX worked! MI_FLUSH_DW is legal on VDBOX\n");
+        else printf("[S2] => scratch=0x%08X (expected 0x77777777) ESR=0x%X\n", (uint32_t)ro[5], (uint32_t)ro[0]);
 
-        /* ── [S3 DEBUG] แยก 2 รอบ เพื่อ isolate ว่าตัวไหน fail ── */
-        /* [S3-A] เขียน dst เฉพาะ dstGgtt */
+        /* [S3 DEBUG] two passes to isolate which one fails */
+        /* [S3-A] write dst only to dstGgtt */
         ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
         ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
         printf("[S3-A] dstGgtt=0x%08X scrGgtt=0x%08X\n", dstGgtt, scrGgtt);
@@ -425,9 +422,9 @@ int main(int argc, char *argv[])
         DO_RESET("S3-A");
         uint32_t ma = ((volatile uint32_t *)dstVA)[0];
         uint32_t mb = ((volatile uint32_t *)scrVA)[0];
-        printf("[S3-A] dst=0x%08X scr=0x%08X (คาด dst=0x1357BDF0 scr=0x5A5A5A5A)\n", ma, mb);
+        printf("[S3-A] dst=0x%08X scr=0x%08X (expect dst=0x1357BDF0 scr=0x5A5A5A5A)\n", ma, mb);
 
-        /* [S3-B] เขียน scr เฉพาะ scrGgtt */
+        /* [S3-B] write only scr to scrGgtt */
         ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
         ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
         pn = 0;
@@ -439,9 +436,9 @@ int main(int argc, char *argv[])
         DO_RESET("S3-B");
         ma = ((volatile uint32_t *)dstVA)[0];
         mb = ((volatile uint32_t *)scrVA)[0];
-        printf("[S3-B] dst=0x%08X scr=0x%08X (คาด dst=0xA5A5A5A5 scr=0x2468ACE0)\n", ma, mb);
+        printf("[S3-B] dst=0x%08X scr=0x%08X (expect dst=0xA5A5A5A5 scr=0x2468ACE0)\n", ma, mb);
 
-        /* [S3-C] ทั้งคู่กลับมา */
+        /* [S3-C] both again */
         ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
         ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
         pn = 0;
@@ -453,19 +450,19 @@ int main(int argc, char *argv[])
         DO_RESET("S3-C");
         ma = ((volatile uint32_t *)dstVA)[0];
         mb = ((volatile uint32_t *)scrVA)[0];
-        printf("[S3-C] dst=0x%08X scr=0x%08X (คาด 0x1357BDF0/0x2468ACE0)\n", ma, mb);
+        printf("[S3-C] dst=0x%08X scr=0x%08X (expect 0x1357BDF0/0x2468ACE0)\n", ma, mb);
 
         if (ma == 0x1357BDF0 && mb == 0x2468ACE0) {
-            printf("[S3] => GGTT write path OK! — ปัญหาเหลือแค่ MFX state/pipeline\n");
+            printf("[S3] => GGTT write path OK! — only remaining suspect is MFX state/pipeline\n");
         } else {
-            /* วินิจฉัย: ตัวไหน fail */
-            printf("[S3-DIAG] A(dst单独): dst=%s  B(scr单独): scr=%s  C(both): dst=%s scr=%s\n",
+            /* which one failed? */
+            printf("[S3-DIAG] A(dst only): dst=%s  B(scr only): scr=%s  C(both): dst=%s scr=%s\n",
                    ma == 0x1357BDF0 ? "OK" : "FAIL",
                    mb == 0x2468ACE0 ? "OK" : "FAIL",
                    "check above", "check above");
 
             DO_RESET("S3");
-            /* [S4] PPGTT: รูปแบบเดียวกับ S3 แต่ DAT(bit2)=0 → PPGTT identity-map */
+            /* [S4] PPGTT: same shape as S3 but DAT(bit2)=0 → PPGTT identity-map */
             ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
             ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
             pn = 0;
@@ -476,18 +473,18 @@ int main(int argc, char *argv[])
             DO_SUBMIT("S4 ppgtt");
             ma = ((volatile uint32_t *)dstVA)[0];
             mb = ((volatile uint32_t *)scrVA)[0];
-            printf("[S4] dst=0x%08X scr=0x%08X (คาด 0x1357BDF0/0x2468ACE0)\n", ma, mb);
+            printf("[S4] dst=0x%08X scr=0x%08X (expect 0x1357BDF0/0x2468ACE0)\n", ma, mb);
             if (ma == 0x1357BDF0 && mb == 0x2468ACE0)
-                printf("[S4] => PPGTT write OK — ตัวปัญหาคือ USE_GTT! ใช้ PPGTT addr แทน\n");
+                printf("[S4] => PPGTT write OK — USE_GTT was the problem! use the PPGTT address instead\n");
             else {
                 DO_RESET("S4");
-                printf("[S4] => เขียนไม่สำเร็จทุกรูปแบบ — ปัญหาอยู่ระดับ context/execution\n");
+                printf("[S4] => no write in any flavor — the problem is context/execution level\n");
             }
         }
-        /* [S5] NULL-submit (BBE-only): ใครเขียน zeros @+4..7 — infra หรือ MFX?
-         * pre-poison dword[0..1] ทั้งสอง buffer, ส่ง stream เปล่า, อ่านกลับ
-         * [1] กลายเป็นศูนย์ = writer ไม่ได้อยู่ในคำสั่ง MFX เลย
-         * A/B: MFX_S5=1 เท่านั้น (default OFF — reset แทรกก่อน MFX อาจกระทบ VDBOX) */
+        /* [S5] NULL-submit (BBE-only): who writes zeros @+4..7 — infra or MFX?
+         * pre-poison dword[0..1] of both buffers, submit an empty stream, read back
+         * [1] became zero = the writer is not in the MFX commands at all
+         * A/B: only with MFX_S5=1 (default OFF — the reset before MFX may affect VDBOX) */
         if (getenv("MFX_S5")) {
             ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
             ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
@@ -501,7 +498,7 @@ int main(int argc, char *argv[])
                    ((volatile uint32_t *)scrVA)[0], ((volatile uint32_t *)scrVA)[1]);
         }
 
-        /* restore poison ให้ readback classification ยังแม่น */
+        /* restore poison so readback classification stays accurate */
         ((volatile uint32_t *)dstVA)[0] = 0xA5A5A5A5;
         ((volatile uint32_t *)scrVA)[0] = 0x5A5A5A5A;
         DO_RESET("final");
@@ -509,21 +506,21 @@ int main(int argc, char *argv[])
         #undef DO_SUBMIT
     }
 
-    /* ── สร้าง command sequence ── */
+    /* build the command sequence */
     MyIntelVCSCmdBuf cmdBuf;
     vcsCmdInit(&cmdBuf, VCS_CMD_H264_DECODE);
 
     if (haveSlice) {
-        /* ── Phase 10: Gen12 MFX sequence ครบชุด (เฟรม IDR แรก) ── */
-        /* long-format BSD: DW2 ชี้ที่ NAL header.
-         * FirstMbByteOffsetOfSliceDataOrSliceHeader = ขนาด NAL header + slice header (byte ที่ slice data เริ่ม)
-         *   → match media-driver dwOffset (non-Intel entrypoint). ต้องเป็น sliceHeaderBytes ไม่ใช่ 1!
-         * FirstMacroblockMbBitOffset = bit offset ของ MB แรก (0-7) ภายใน byte นั้น */
+        /* Gen12 MFX sequence, complete set (first IDR frame) */
+        /* long-format BSD: DW2 points at the NAL header.
+         * FirstMbByteOffsetOfSliceDataOrSliceHeader = NAL header + slice header size (byte where slice data begins)
+         *   → match media-driver dwOffset (non-Intel entrypoint). Must be sliceHeaderBytes, not 1!
+         * FirstMacroblockMbBitOffset = bit offset of the first MB (0-7) inside that byte */
 
         /* [P4] MI_FORCE_WAKEUP (Gen12): opcode 29 << 23 = 0x0E800000, 2 dwords
          * DW1: bit9=MfxPowerWellControl + bit0=ForceMediaSlice0Awake(VDBOX0)
          *      + MaskBits[31:16]: bit25(mfx)+bit16(slice0) → 0x02010201
-         * A/B: MFX_WAKEUP=1 เท่านั้น — ปลุก VDBOX ก่อน PIPE_MODE_SELECT แบบที่ driver แท้ทำ */
+         * A/B: only with MFX_WAKEUP=1 — wake VDBOX before PIPE_MODE_SELECT like the real driver does */
         if (getenv("MFX_WAKEUP")) {
             uint32_t fw[2] = { 0x0E800000, 0x02010201 };
             vcsCmdEmitBatch(&cmdBuf, fw, 2);
@@ -532,12 +529,12 @@ int main(int argc, char *argv[])
         vcsCmdG12PipeModeSelect(&cmdBuf, false);
         vcsCmdG12SurfaceState(&cmdBuf, cropW, cropH, pitch);
         vcsCmdG12PipeBufAddr(&cmdBuf, dstGgtt, scrGgtt, refGgtt);
-        /* [P14] MFX_IAOFF=n: เลื่อน IA base ออก n หน้า — ทดสอบว่า HW อ่านบิตสตรีมจริงไหม
-         * (ถ้าผลเหมือนเดิมเป๊ะแม้ชี้หน้าผิด = fetch path ไม่ทำงาน) */
+        /* [P14] MFX_IAOFF=n: shift IA base by n pages — tests whether HW truly reads the bitstream
+         * (identical result with the page pointed elsewhere = fetch path not working) */
         uint32_t iaOff = getenv("MFX_IAOFF") ? strtoul(getenv("MFX_IAOFF"), NULL, 0) * 0x1000u : 0;
         vcsCmdG12IndObj(&cmdBuf, srcGgtt + iaOff, (uint32_t)bitLen, mvGgtt + iaOff, 0x40000);
-        /* BSP_BUF: BSD/MPC + MPR row store scratch (picWidthMB*2*64 ต่ออัน) —
-         * driver ส่งทุกเฟรม; ใช้ช่วง 0xC0000/0xC1000 ของ scratch 1MB */
+        /* BSP_BUF: BSD/MPC + MPR row store scratch (picWidthMB*2*64 each) —
+         * driver sends this every frame; use the 0xC0000/0xC1000 range of the 1MB scratch */
         vcsCmdG12BspBufBaseAddr(&cmdBuf, scrGgtt + 0xC0000, scrGgtt + 0xC1000);
         vcsCmdG12AvcPicIdState(&cmdBuf);
         vcsCmdG12AvcImgState(&cmdBuf,
@@ -550,20 +547,20 @@ int main(int argc, char *argv[])
             sh.numRefIdxL1Active, pps.deblockCtrlPresent,
             pps.chromaQpIndexOffset, pps.secondChromaQpIndexOffset);
         /* QM_STATE × 4 (intra4x4/inter4x4/intra8x8/inter8x8, default matrix) */
-        /* [P14] MFX_NOQM=1: ข้าม QM×4 — driver ส่งเฉพาะเมื่อ pic_scaling_matrix_present_flag */
+        /* [P14] MFX_NOQM=1: skip QM x4 — driver only sends them when pic_scaling_matrix_present_flag is set */
         if (getenv("MFX_NOQM")) {
             printf("[P14] NOQM: skipped 4x QM_STATE\n");
         } else {
             vcsCmdG12QmState(&cmdBuf);
         }
-        /* [P14] MFX_DMVSEP=1: write buffer แยกครึ่งหลัง — กัน read==write perfect aliasing */
+        /* [P14] MFX_DMVSEP=1: split the write buffer's upper half — avoids read==write perfect aliasing */
         vcsCmdG12DirectMode(&cmdBuf, mvGgtt,
             getenv("MFX_DMVSEP") ? (mvGgtt + 0x20000) : mvGgtt);
-        /* driver: dummy REF_IDX สำหรับ I-Frame (empty command) — A/B: MFX_REFIDX=1 เท่านั้น */
+        /* driver: dummy REF_IDX for I-Frame (empty command) — A/B: only with MFX_REFIDX=1 */
         if (getenv("MFX_REFIDX"))
             vcsCmdG12AvcRefIdxDummy(&cmdBuf);
-        /* [P13-EMIT] multi-slice: ส่ง SliceState+BSD ครบทุก slice ของเฟรม
-         * lastSlice เฉพาะตัวสุดท้าย · NextSlice ของตัวก่อนหน้าชี้ firstMb ของตัวถัดไป */
+        /* [P13-EMIT] multi-slice: emit SliceState+BSD for every slice of the frame
+         * only the last slice gets lastSlice; previous slices' NextSlice points at the next slice's firstMb */
         const char *sq = getenv("MFX_SLICEQP");
         int sqOv = sq ? (int)strtol(sq, NULL, 0) : -1;
         const char *db = getenv("MFX_DEBLOCK");
@@ -618,7 +615,7 @@ int main(int argc, char *argv[])
         if (slices > 8) slices = 8;
         vcsCmdMfxSliceState(&cmdBuf, slices);
     }
-    /* ── [P14] ตัด flush ท้าย stream ── */
+    /* trim the trailing flush of the stream */
     vcsCmdBatchEnd(&cmdBuf);
     cmdBytes = cmdBuf.count * 4;
     padDwords = (16 - (cmdBytes % 16)) / 4;
@@ -630,7 +627,7 @@ int main(int argc, char *argv[])
     printf("[CMDBUF] First 8:");
     for (uint32_t i = 0; i < 8 && i < cmdBuf.count; i++) printf(" 0x%08X", cmdBuf.cmds[i]);
     printf("\n");
-    /* dump เต็ม — ยืนยันว่า dword ชุด fix (MOCS/NextSlice/BSD DW6) ลง stream จริง */
+    /* dump everything — confirms the fixed dwords (MOCS/NextSlice/BSD DW6) really land in the stream */
     for (uint32_t i = 0; i < cmdBuf.count; i += 8) {
         printf("[DW%03u]", i);
         for (uint32_t j = i; j < i + 8 && j < cmdBuf.count; j++)
@@ -638,27 +635,27 @@ int main(int argc, char *argv[])
         printf("\n");
     }
 
-    /* ── [P3] forensic snapshot ก่อน MFX submit — diff หา write positions แม่นระดับ dword ── */
+    /* forensic snapshot before the MFX submit — diff finds write positions at dword granularity */
     uint32_t preDst[64], preScr[64];
     for (int i = 0; i < 64; i++) {
         preDst[i] = ((volatile uint32_t *)dstVA)[i];
         preScr[i] = ((volatile uint32_t *)scrVA)[i];
     }
 
-    /* ── [P7] MFX_BBSTART=1: wrap ลำดับคำสั่ง MFX ใน Batch Buffer + ring เหลือแค่ BB_START
-     * (ทุก stack จริง submit media ผ่าน BB; inline-in-ring อาจถูก VDBOX เฉย) ── */
+    /* [P7] MFX_BBSTART=1: wrap the MFX command sequence in a Batch Buffer + ring holding just BB_START
+     * (every real stack submits media through a BB; inline-in-ring may be ignored by VDBOX) */
     if (getenv("MFX_BBSTART")) {
         uint32_t bbHandle = 0, bbGgtt = 0, bbSize = 0;
         void *bbVA = NULL; size_t bbMapSz = 0;
         kr = gemCreate(conn, 0x1000, MYVCS_GEM_SOURCE, &bbHandle, &bbGgtt, &bbSize);
         printf("[P7] batch GEM handle=%u ggtt=0x%X kr=0x%X\n", bbHandle, bbGgtt, kr);
         if (kr == KERN_SUCCESS && gemMap(conn, bbHandle, &bbVA, &bbMapSz) == KERN_SUCCESS) {
-            /* breadcrumb ชี้ขาด: MI_FLUSH_DW เขียน magic ก่อน/หลัง MFX — magic โผล่ = batch ถูก execute
-             * MFX_BBMODE=1: batch MI ล้วน (breadcrumb+BBE) | 2: crumb+MFX+crumb2 | default: crumb+MFX */
+            /* breadcrumb verdict: MI_FLUSH_DW writes a magic before/after MFX — magic appears = batch was executed
+             * MFX_BBMODE=1: all-MI batch (crumb+BBE) | 2: crumb+MFX+crumb2 | default: crumb+MFX */
             const char *bmv = getenv("MFX_BBMODE");
             uint32_t bbmode = bmv ? (uint32_t)strtoul(bmv, NULL, 0) : 0;
             uint32_t w = 0;
-            /* [scr0] MFX_ALIGN4K=1: ปัดเป้า store ไปขอบเขตหน้า 4KB — ทดสอบ page-granular store */
+            /* [scr0] MFX_ALIGN4K=1: round the store target to a 4KB page boundary — tests page-granular store */
             const char *alv = getenv("MFX_ALIGN4K");
             uint32_t crumbAddr = alv ? ((scrGgtt + 0x1000) & ~0xFFFu)
                                      : (scrGgtt + 0x100);
@@ -668,13 +665,13 @@ int main(int argc, char *argv[])
             ((volatile uint32_t *)bbVA)[w++] = 0xC0DEC0DE;
             ((volatile uint32_t *)bbVA)[w++] = 0;
             if (bbmode != 1) {
-                /* [P9] MICROSCOPE: แทรก breadcrumb หลังทุกคำสั่ง — เห็นจุดสุดท้ายที่ HW เดินถึง */
-                /* [P14-FIX] copy ENTIRE stream ก้อนเดียว — ไม่พึ่งตาราง boundary คงที่
-                 * (ตารางเก่า {…309} ทำ slice2 หลุด batch + NOQM อ่านเกิน count!)
-                 * MFX_UPTO_DW=n: ตัด raw dword index เพื่อ bisect */
+                /* [P9] MICROSCOPE: insert a breadcrumb after every command — shows the last point HW reached */
+                /* [P14-FIX] copy the ENTIRE stream in one go — do not rely on a fixed boundary table
+                 * (the old table {…309} dropped slice2 out of the batch + NOQM read past count!)
+                 * MFX_UPTO_DW=n: clamp raw dword index for bisect */
                 uint32_t uptoDw = cmdBuf.count;
-                /* strip ท้ายสตรีมแบบกวาดจริง: ศูนย์ท้าย → BBE
-                 * (cmdBuf มี zero-pad ต่อท้าย BBE ทำ conditional ง่ายๆ พลาด) */
+                /* strip the stream tail honestly: trailing zeros -> BBE
+                 * (cmdBuf has zero-pad after BBE which breaks naive conditionals) */
                 while (uptoDw && cmdBuf.cmds[uptoDw - 1] == 0) uptoDw--;
                 if (uptoDw && cmdBuf.cmds[uptoDw - 1] == 0x05000000u) uptoDw--;
                 const char *udw = getenv("MFX_UPTO_DW");
@@ -711,7 +708,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* ── ส่งผ่าน Selector 6 ── */
+    /* submit through Selector 6 */
     printf("[SUBMIT] selector 6, %u bytes...\n", cmdBytes);
     sOutCnt = 0;
     kr = IOConnectCallMethod(conn, kMyVCSSubmitVCSWorkload, NULL, 0,
@@ -751,11 +748,11 @@ wait_and_readback:
         }
     }
 
-    /* [P2] timing ปรับได้: MFX_WAIT_MS (default 300) — decode ช้ากว่า poll ไหม? */
+    /* [P2] tunable timing: MFX_WAIT_MS (default 300) — is decode slower than the poll? */
     {
         const char *wenv = getenv("MFX_WAIT_MS");
         uint32_t waitMs = wenv ? (uint32_t)strtoul(wenv, NULL, 0) : 300;
-        printf("\n[WAIT] %ums ให้ VDBOX ทำงาน...\n", waitMs);
+        printf("\n[WAIT] %ums giving VDBOX time to work...\n", waitMs);
         usleep(waitMs * 1000);
     }
     sOutCnt = 1; memset(sOut, 0, sizeof(sOut));
@@ -775,7 +772,7 @@ wait_and_readback:
             printf("[ENGINE-DIAG post-wait] => ESR bit0 SET: engine halted with error during decode!\n");
     }
 
-    /* ── [P3] forensic diff: ทุก dword ที่เปลี่ยนจากก่อน submit (64 dwords แรกของ dst/scr) ── */
+    /* [P3] forensic diff: every dword that changed vs pre-submit (first 64 dwords of dst/scr) */
     {
         int nDst = 0, nScr = 0;
         for (int i = 0; i < 64; i++) {
@@ -794,7 +791,7 @@ wait_and_readback:
 
     }
 
-    /* ── อ่าน Destination Surface กลับมาพิสูจน์ผล decode ── */
+    /* read the Destination Surface back to verify the decode */
     if (dstVA) {
         const uint8_t *px = (const uint8_t *)dstVA;
         uint32_t poisonCnt = 0, zeroCnt = 0, otherCnt = 0;
@@ -807,19 +804,19 @@ wait_and_readback:
         printf("[READBACK] probe=%zu poison(0xA5)=%u zero=%u other=%u\n",
                probe, poisonCnt, zeroCnt, otherCnt);
         if (poisonCnt == probe) {
-            printf("[READBACK] => VDBOX ไม่ได้เขียน surface เลย (state/address ผิด หรือ decode ไม่เริ่ม)\n");
+            printf("[READBACK] => VDBOX never wrote the surface (wrong state/address, or decode never started)\n");
         } else if (otherCnt > 0 && otherCnt > zeroCnt) {
-            printf("[READBACK] => HW เขียนพิกเซลจริง! decode สำเร็จ\n");
+            printf("[READBACK] => HW wrote real pixels! decode succeeded\n");
         } else {
-            printf("[READBACK] => VDBOX เขียนทับ poison แล้ว แต่ได้ค่า 0/ดำ (decode รันแต่ผลลัพธ์ผิด)\n");
+            printf("[READBACK] => VDBOX overwrote the poison but got 0/black (decode ran, output wrong)\n");
         }
         printf("[READBACK] first 16:");
         for (int i = 0; i < 16; i++) printf(" %02X", px[i]);
         printf("\n");
 
-        /* ── วินิจฉัย coherence: อ่านผ่าน GGTT aperture (selector 3) ──
-         * ถ้า aperture เห็นพิกเซล แต่ direct map เห็น 0 = CPU cache stale
-         * (GPU เขียนผ่าน LLC/DRAM แต่ CPU อ่าน line เก่าใน L3) */
+        /* coherence check: read through the GGTT aperture (selector 3)
+         * if the aperture sees pixels but the direct map sees 0 = CPU cache stale
+         * (GPU wrote via LLC/DRAM but the CPU read the old L3 line) */
         uint64_t mapIn[2]  = { dstGgtt, surfSize };
         uint64_t mapOut[1] = { 0 };
         uint32_t mapOutCnt = 1;
@@ -837,8 +834,8 @@ wait_and_readback:
                 for (size_t i = 0; i < apProbe; i++) if (ap[i]) apNZ++;
                 printf("[READBACK-APERTURE] probe=%zu nonzero=%u (%s)\n",
                        apProbe, apNZ,
-                       apNZ ? "aperture เห็นพิกเซล — CPU cache stale!" :
-                              "aperture ก็ 0 — HW ยังไม่ได้เขียนจริง");
+                        apNZ ? "aperture sees pixels — CPU cache stale!" :
+                               "aperture is 0 too — HW never really wrote");
                 printf("[READBACK-APERTURE] first 16:");
                 for (int i = 0; i < 16; i++) printf(" %02X", ap[i]);
                 printf("\n");
@@ -850,8 +847,8 @@ wait_and_readback:
             printf("[READBACK-APERTURE] mapOutputBuffer failed kr=0x%X\n", kr);
         }
 
-        /* ── H1 discriminator: VDBOX อ่าน bitstream ผ่าน GGTT เห็นตรง CPU map? ──
-         * memcpy ของ CPU ลง srcVA ต้องปรากฏผ่าน aperture ถ้า PTE/map ตรงกัน */
+        /* [H1] discriminator: does the VDBOX see the bitstream through GGTT the same as the CPU map?
+         * the CPU memcpy into srcVA must appear via the aperture if PTE/map agree */
         {
             uint64_t mapInS[2]  = { srcGgtt, srcMapSz };
             uint64_t mapOutS[1] = { 0 };
@@ -897,7 +894,7 @@ wait_and_readback:
         }
     }
 
-    /* ── pipeline progress: buffer ไหนถูก VDBOX เขียนบ้าง? ── */
+    /* pipeline progress: which buffers did VDBOX write? */
     {
         struct { const char *name; const uint8_t *va; size_t sz; uint8_t pat; }
         bufs[3] = {
@@ -915,7 +912,7 @@ wait_and_readback:
                 if (bufs[b].va[i] != bufs[b].pat) {
                     changed++;
                     if (nch < 4) {
-                        /* จับ offset แรกของแต่ละ dword ที่เปลี่ยน */
+                        /* capture the first offset of each changed dword */
                         if (nch == 0 || i >= chOff[nch-1] + 4) {
                             chOff[nch] = i & ~(size_t)3;
                             chVal[nch] = bufs[b].va[i];
@@ -925,7 +922,7 @@ wait_and_readback:
                 }
             }
             printf("[PIPELINE] %s: %u/%zu bytes changed%s\n",
-                   bufs[b].name, changed, lim, changed ? " ← VDBOX เขียน!" : "");
+                   bufs[b].name, changed, lim, changed ? " <- VDBOX wrote!" : "");
             if (nch > 0) {
                 printf("[PIPELINE]   changed dwords:");
                 for (int k = 0; k < nch; k++)
@@ -933,7 +930,7 @@ wait_and_readback:
                 printf("\n");
             }
         }
-        /* MB status / error region (scratch + 0x80000, ตาม DW52 ของ PIPE_BUF_ADDR) */
+        /* MB status / error region (scratch + 0x80000, per DW52 of PIPE_BUF_ADDR) */
         if (scrVA && scrMapSz > 0x80040) {
             const uint32_t *st = (const uint32_t *)((const uint8_t *)scrVA + 0x80000);
             printf("[PIPELINE] MB-status @+0x80000 (64 dwords):\n");

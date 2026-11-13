@@ -1,9 +1,3 @@
-/*===========================================================================
- *  MyIntelFramebuffer.cpp
- *  Hackintosh Kext — IOFramebuffer Binding Implementation (Phase 4)
- *  macOS 15 Sequoia SDK
- *///=========================================================================
-
 #include "MyIntelFramebuffer.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
@@ -578,7 +572,7 @@ IOReturn MyIntelFramebuffer::getAttributeForConnection(
 
         case kConnectionEnableAudio:
         case kConnectionAudioStreaming:
-            /* 2.0.229 (H2, ปฏิบัติการแหกตำรา): this GPU has no display
+            /* 2.0.229 (H2, display pipeline overhaul): this GPU has no display
              * audio engine bound (no AudioDxe/AppleHDA path); claiming
              * success here makes WindowServer wait on audio that never
              * comes. Report unsupported so the audio subsystem skips the
@@ -808,7 +802,7 @@ void MyIntelFramebuffer::ensureModeList(void)
 /* Restored 2026-10-28: commit 4037ba8 dropped this definition while start()
  * (line 162) kept calling it, leaving an undefined external in the kext.
  * OSKext::load rejects unresolved symbols, so the driver never appeared in
- * kextstat. Body matches 4aebbb3 / คลังข้อมูล snapshot. */
+ * kextstat. Body matches 4aebbb3 / known-good snapshot. */
 void MyIntelFramebuffer::setupDefaultMode(void)
 {
     fCurrentModeID = MYFB_DEFAULT_MODE_ID;

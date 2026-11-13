@@ -83,14 +83,14 @@ MyIntelGPUVersion.h: FORCE
 	@rm -f $@.tmp
 
 # ─── Compiler Flags ──────────────────────────────────────────────
-# -D_FORTIFY_SOURCE=0 (ต้องเป็นค่า 0 — MacKernelSDK/Headers/string.h:127 เช็ค
-# `defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0` แล้วจึงเรียก strlcpy จริง
-# ถ้า undefined หรือ =1 จะไปหล่นลงบรรทัด 153 `#define strlcpy(...) __builtin___strlcpy_chk(...)`
-# เกิด undefined __strlcpy_chk ซึ่งเป็น symbol ของ libSystem (userspace) — kext ที่
-# link กับ kernel/libkern resolve ไม่ได้ → ต้องกำจัดออก
-# หมายเหตุ: __bzero ที่ยังเหลือใน undefined list เป็น kernel symbol จริง (พิสูจน์แล้วจาก
-# RtWlanU.kext / RtWlanU1827.kext ที่ deploy ใน /Library/Extensions) ไม่ต้องแตะ
-# ห้ามใช้ -U_FORTIFY_SOURCE: undefine แล้ว guard ยังไม่ผ่าน ผลเหมือนเดิม
+# -D_FORTIFY_SOURCE=0 (must be exactly 0 — MacKernelSDK/Headers/string.h:127 checks
+# `defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0` and only then calls the real strlcpy;
+# if undefined or =1 we fall through to line 153 `#define strlcpy(...) __builtin___strlcpy_chk(...)`
+# producing an undefined __strlcpy_chk, a libSystem (userspace) symbol — the kext
+# links against kernel/libkern and cannot resolve it → must be eliminated
+# Note: __bzero still in the undefined list is a real kernel symbol (proven by the
+# RtWlanU.kext / RtWlanU1827.kext deployed under /Library/Extensions) — leave it alone
+# Do NOT use -U_FORTIFY_SOURCE: undefining leaves the guard failing the same way, same result
 ifeq ($(USE_MKS),1)
 KERNEL_HEADERS   = -I$(SDK_DIR)/Headers \
                    -I$(SDK_XCRUN)/usr/include
@@ -100,16 +100,16 @@ KERNEL_HEADERS   = -I$(SDK_XCRUN)/System/Library/Frameworks/Kernel.framework/Hea
                    -I$(SDK_XCRUN)/usr/include
 KMOD_LIB         =
 endif
-# Size budget: บิ้วต้องไม่เกิน 220,000 bytes (repo หลักใช้ 216,000; รีโพนี้
-# รวม IntelFramebuffer.cpp เพิ่มอีก ~10KB → 4.4.x ลิงก์ออกมา 217,296 bytes)
+# Size budget: build must not exceed 220,000 bytes (main repo ships 216,000; this repo
+# adds IntelFramebuffer.cpp ~10KB → 4.4.x links at 217,296 bytes)
 # -Oz                    : size-first optimizer (smaller than -Os)
 # -ffunction-sections/-fdata-sections + -Wl,-dead_strip
-#                        : section-per-function แล้ว linker ตัดฟังก์ชัน/ข้อมูล
-#                          ที่ไม่มีใครอ้างถึง ออกทั้ง TU (ปกติ ld รวม section ไว้ด้วยกัน
-#                          ตัดได้เฉพาะเมื่อแยก section)
-# หมายเหตุ: static ctors ของ OSMetaClass (ลง register class ตอนโหลด) อยู่ใน
-# __mod_init_funcs ซึ่ง linker ถือเป็น root — class metadata รอด dead_strip
-# (พิสูจน์แล้วด้วย nm + kextutil + ioreg หลัง build)
+#                        : section-per-function, then the linker drops functions/data
+#                          nobody references across the whole TU (ld normally merges sections
+#                          so it can only cut when sections are split)
+# Note: static ctors of OSMetaClass (register the class at load time) live in
+# __mod_init_funcs which the linker treats as roots — class metadata survives dead_strip
+# (verified via nm + kextutil + ioreg after build)
 CXXFLAGS = -std=c++14 \
            -mkernel \
            -fapple-kext \
@@ -134,13 +134,13 @@ CXXFLAGS = -std=c++14 \
            $(KERNEL_HEADERS)
 
 # ─── Linker Flags ────────────────────────────────────────────────
-# -dead_strip : ตัด section ที่ไม่ถูกอ้างถึง (คู่กับ -ffunction-sections ด้านบน)
-# -x          : ตัด local symbol ตอน link (ผลเดียวกับ strip -x)
-# -exported_symbols_list : เก็บ symbol ไว้แค่ 38 ตัว (_kmod_info, _VblankEvent,
-#           _vcsCmd*) — ที่เหลือ (C++ mangled ~286 syms) ถูกซ่อนตอน link
-#           แล้ว strip -x ลบทิ้งจาก strtab/symtab → ลด LINKEDIT ~18KB
-#           การ register class ผ่าน __mod_init_func (section-based) ไม่ใช่
-#           ชื่อ symbol จึงไม่กระทบ personality matching (พิสูจน์แล้วด้วย nm)
+# -dead_strip : drop sections nobody references (pairs with -ffunction-sections above)
+# -x          : cut local symbols at link time (same effect as strip -x)
+# -exported_symbols_list : keep only 38 symbols (_kmod_info, _VblankEvent,
+#           _vcsCmd*) — the rest (~286 C++ mangled syms) are hidden at link time
+#           and strip -x removes them from strtab/symtab → saves ~18KB of LINKEDIT
+#           Class registration runs through __mod_init_func (section-based), not
+#           symbol names, so personality matching is unaffected (verified via nm)
 LDFLAGS = -Xlinker -kext \
           -Xlinker -dead_strip \
           -Xlinker -x \
@@ -267,7 +267,13 @@ sizecheck:
 	fi
 
 # ─── Installer Package (.pkg) ────────────────────────────────────
-# pkgbuild --ownership recommended assigns root:wheel to payload items
+# pkgbuild --root takes a payload DIRECTORY whose CONTENTS get installed at
+# --install-location. Pointing --root at MyIntelGPU.kext itself with
+# --install-location=/Library/Extensions would install the bundle's Contents/
+# directly into /Library/Extensions (no .kext wrapper) — a broken kext.
+# Instead the payload lands at /Library/Extensions/MyIntelGPU.kext/Contents/...
+# which is exactly what packaging/postinstall expects.
+# --ownership recommended assigns root:wheel to payload items
 # installed under /Library — required for kext loading. packaging/ holds
 # preinstall (backup existing kext) and postinstall (chown + kmutil).
 PKG_IDENTIFIER := com.pongpan-bk.MyIntelGPU
@@ -280,7 +286,7 @@ pkg: all
 		--scripts packaging \
 		--identifier $(PKG_IDENTIFIER) \
 		--version "$(STAMPED_VERSION)" \
-		--install-location /Library/Extensions \
+		--install-location /Library/Extensions/$(TARGET).kext \
 		--ownership recommended \
 		"$(PKG_NAME)"
 	@ls -la "$(PKG_NAME)"

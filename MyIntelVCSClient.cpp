@@ -1,8 +1,5 @@
-/*
- * MyIntelVCSClient — IOUserClient for VCS command submission
- * Author: pongpan-bk | Tooling: OpenCode (OhMyOpenCode)
- * Phase 8: User-space H.264/HEVC command submission via externalMethod()
- */
+/* IOUserClient for VCS command submission (Phase 8):
+ * user-space H.264/HEVC command submission via externalMethod(). */
 
 #include "MyIntelVCSClient.h"
 #include "MyIntelGPU.hpp"
@@ -239,7 +236,7 @@ IOReturn MyIntelVCSClient::clientMemoryForType(uint32_t type, uint32_t *flags,
         }
 
         *memory = desc;
-        *flags = kIOMapAnywhere;   /* read-write เป็น default ของ mapping */
+        *flags = kIOMapAnywhere;   /* read-write is the default mapping mode */
 
         IODebug("clientMemoryForType: GEM handle=%u size=%u ggtt=0x%X",
                 handle, buf->size, buf->ggttOffset);
@@ -1113,10 +1110,10 @@ IOReturn MyIntelVCSClient::mapExternalPhys(OSObject *target, void *reference,
  *  Phase 9 — GEM Buffer Allocation (user-space ABI)
  * ─────────────────────────────────────────────
  *
- *  จองบัฟเฟอร์ 2 ชนิดตาม roadmap:
+ *  Allocates two buffer kinds per the roadmap:
  *    - Source Buffer      : H.264 bitstream (CPU write → GPU read)
  *    - Destination Surface: decoded NV12    (GPU write → CPU read)
- *  ทั้งคู่ bind เข้า GGTT จริง → VDBOX DMA ถึงโดยตรง
+ *  Both are bound into the real GGTT → VDBOX DMA reaches them directly
  */
 
 /*
@@ -1255,7 +1252,7 @@ IOReturn MyIntelVCSClient::gemGetInfo(OSObject *target, void *reference,
 /*
  * freeAllGemBuffers — release every slot still active (clientClose/free)
  *
- * กัน client ปิดตัวทิ้ง buffer ค้างใน GGTT (PTE ค้าง = aperture รู่ว)
+ * Keeps the client from shutting down and leaking buffers in the GGTT (stale PTEs = aperture leak)
  */
 void MyIntelVCSClient::freeAllGemBuffers(void)
 {

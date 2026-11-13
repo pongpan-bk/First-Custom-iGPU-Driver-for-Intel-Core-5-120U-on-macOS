@@ -1,22 +1,20 @@
-/*===========================================================================
- *  myintel_h264_parse.h — H.264/AVC bitstream parser (header-only)
+/*
+ * H.264/AVC bitstream parser (header-only).
  *
- *  สร้าง 2026-08-21 — Phase 10: Full MFX Decode
+ * Parse SPS / PPS / slice header from a real Annex-B bitstream
+ *  to feed correct values to MFX_AVC_IMG_STATE / MFX_AVC_SLICE_STATE /
+ *  MFD_AVC_BSD_OBJECT (replacing the Phase 9 templates)
  *
- *  Parse SPS / PPS / slice header จาก Annex-B bitstream จริง
- *  เพื่อป้อนค่าที่ถูกต้องให้ MFX_AVC_IMG_STATE / MFX_AVC_SLICE_STATE /
- *  MFD_AVC_BSD_OBJECT (แทนค่า template ของ Phase 9)
- *
- *  รองรับเฉพาะส่วนที่จำเป็นสำหรับ decode:
- *    - SPS: ขนาดภาพ, profile, log2_max_frame_num, POC type, ref frames,
+ *  Only the sections required for decode are supported:
+ *    - SPS: picture size, profile, log2_max_frame_num, POC type, ref frames,
  *           frame_mbs_only, direct_8x8, cropping
  *    - PPS: entropy mode, pic_order_present, weighted_pred, deblock ctrl,
  *           pic_init_qp, chroma qp offsets, **scaling_list**
  *    - slice header: first_mb, slice_type, frame_num, POC lsb, IDR marking,
  *           qp_delta, deblock, cabac_init_idc
  *
- *  Pure C, ไม่มี kernel deps — ใช้ได้ทั้ง test app และ dylib
- *=========================================================================*/
+ *  Pure C, no kernel deps — usable from both the test app and the dylib
+ */
 
 #ifndef __MYINTEL_H264_PARSE_H__
 #define __MYINTEL_H264_PARSE_H__
@@ -25,7 +23,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-/* ── bit reader (MSB-first, ตาม H.264 spec) ─────────────────────── */
+/* ── bit reader (MSB-first, per H.264 spec) ──────────────────────── */
 typedef struct {
     const uint8_t *p;
     uint32_t       len;
@@ -69,13 +67,13 @@ static inline int32_t h264_br_se(H264BitReader *br)
     return (v & 1) ? (int32_t)((v + 1) >> 1) : -(int32_t)(v >> 1);
 }
 
-/* ยังมี bit เหลือไหม */
+/* any bits remaining? */
 static inline bool h264_br_more(H264BitReader *br)
 {
     return br->bytePos < br->len;
 }
 
-/* ── RBSP extract (ถอด emulation prevention 0x03) ────────────────── */
+/* ── RBSP extract (strip emulation prevention 0x03) ─────────────── */
 static inline uint32_t h264_rbsp(const uint8_t *nal, uint32_t nalLen,
                                  uint8_t *out, uint32_t outCap)
 {
@@ -100,7 +98,7 @@ typedef struct {
     uint32_t frameMbsOnly;
     uint32_t direct8x8Inference;
     uint32_t mbAdaptive;
-    uint32_t width, height;          /* หลัง crop แล้ว */
+    uint32_t width, height;          /* after cropping */
     uint32_t picWidthInMbs, picHeightInMbs;
     bool     valid;
 } H264SPS;
@@ -109,7 +107,7 @@ static inline bool h264_parse_sps(const uint8_t *rbsp, uint32_t len, H264SPS *s)
 {
     H264BitReader br;
     memset(s, 0, sizeof(*s));
-    h264_br_init(&br, rbsp + 1, len - 1);   /* ข้าม nal_header byte */
+    h264_br_init(&br, rbsp + 1, len - 1);   /* skip nal_header byte */
 
     s->profileIdc = h264_br_u(&br, 8);
     h264_br_u(&br, 8);                       /* constraint flags + reserved */
@@ -227,9 +225,9 @@ static inline bool h264_parse_pps(const uint8_t *rbsp, uint32_t len,
     p->picOrderPresent = h264_br_get(&br);  /* bottom_field_pic_order_in_frame_present_flag */
     p->numSliceGroupsMinus1 = h264_br_ue(&br);
     if (p->numSliceGroupsMinus1 > 0) {
-        /* ไม่รองรับ FMO — ข้ามแบบง่าย (clip ทั่วไป = 0) */
+        /* FMO not supported — simple skip (typical clip = 0) */
     } else {
-        /* ไม่มี additional */
+        /* no additional data */
     }
     if (p->numSliceGroupsMinus1 > 0) return false;
     p->numRefIdxL0DefaultActiveMinus1 = h264_br_ue(&br);
@@ -243,7 +241,7 @@ static inline bool h264_parse_pps(const uint8_t *rbsp, uint32_t len,
     p->constrainedIntraPred = h264_br_get(&br);
     p->redundantPicCntPresent = h264_br_get(&br);
     p->secondChromaQpIndexOffset = p->chromaQpIndexOffset;
-    if (h264_br_more(&br)) {                 /* ยังไม่จบ — มีส่วนขยาย */
+    if (h264_br_more(&br)) {                 /* not finished — extension present */
         p->transform8x8 = h264_br_get(&br);
         p->picScalingMatrixPresent = h264_br_get(&br); // Read the flag
         if (p->picScalingMatrixPresent) {
@@ -280,10 +278,10 @@ typedef struct {
     int32_t  sliceQpDelta;
     uint32_t disableDeblockingIdc;
     int32_t  alphaC0OffsetDiv2, betaOffsetDiv2;
-    uint32_t numRefIdxL0Active, numRefIdxL1Active;     /* หลัง override */
+    uint32_t numRefIdxL0Active, numRefIdxL1Active;     /* after override */
     uint32_t redundantPicCnt, directSpatialMvPred, nalRefIdc;
-    uint32_t sliceHeaderBytes;   /* โดยประมาณ (byte ที่ slice data เริ่ม) */
-    uint32_t sliceDataBitOffset; /* bit offset ภายใน slice NAL */
+    uint32_t sliceHeaderBytes;   /* approx (byte where slice data begins) */
+    uint32_t sliceDataBitOffset; /* bit offset inside the slice NAL */
     bool     valid;
 } H264SliceHdr;
 
@@ -298,7 +296,7 @@ static inline bool h264_parse_slice(const uint8_t *rbsp, uint32_t len,
      * zero active refs; iHD picture state writes num_ref_idx_lX_active_minus1+1. */
     sh->numRefIdxL0Active = 1;
     sh->numRefIdxL1Active = 1;
-    h264_br_init(&br, rbsp + 1, len - 1);   /* ข้าม nal_header byte */
+    h264_br_init(&br, rbsp + 1, len - 1);   /* skip nal_header byte */
 
     sh->firstMbInSlice = h264_br_ue(&br);
     sh->sliceTypeRaw = h264_br_ue(&br);
@@ -320,11 +318,11 @@ static inline bool h264_parse_slice(const uint8_t *rbsp, uint32_t len,
         h264_br_se(&br);
         if (pps->picOrderPresent) h264_br_se(&br);
     }
-    /* [FIX 2026-11-01] ลำดับ field ตาม spec 7.3.3: redundant_pic_cnt -> direct_spatial
+    /* [FIX 2026-11-01] field order per spec 7.3.3: redundant_pic_cnt -> direct_spatial
      * -> num_ref_idx override -> ref_pic_list_modification -> pred_weight_table
      * -> dec_ref_pic_marking -> cabac_init_idc -> slice_qp_delta
-     * บั๊กเดิม: IDR อ่าน dec_ref_pic_marking 2 รอบ (กินบิตของ slice_qp_delta ไป 1 บิต)
-     * -> slice_qp_delta อ่านได้ -2 แทน -5 -> QP 26 แทน 23 -> ภาพเพี้ยน 17% */
+     * old bug: IDR read dec_ref_pic_marking twice (ate 1 bit of slice_qp_delta)
+     * -> slice_qp_delta decoded as -2 instead of -5 -> QP 26 instead of 23 -> image distorted 17% */
     sh->nalRefIdc = (rbsp[0] >> 5) & 3;
     if (pps->redundantPicCntPresent) sh->redundantPicCnt = h264_br_ue(&br);
     if (sh->sliceType == 1) sh->directSpatialMvPred = h264_br_get(&br);   /* B */
@@ -361,7 +359,7 @@ static inline bool h264_parse_slice(const uint8_t *rbsp, uint32_t len,
             }
         }
     }
-    /* dec_ref_pic_marking() — อ่านครั้งเดียว (IDR = 2 บิต, non-IDR = adaptive flag) */
+    /* dec_ref_pic_marking() — read exactly once (IDR = 2 bits, non-IDR = adaptive flag) */
     if (sh->nalRefIdc != 0) {
         if (isIdr) {
             sh->noOutputOfPriorPics = h264_br_get(&br);
@@ -388,7 +386,7 @@ static inline bool h264_parse_slice(const uint8_t *rbsp, uint32_t len,
             sh->betaOffsetDiv2 = h264_br_se(&br);
         }
     }
-    /* slice_header_bytes โดยประมาณ: ตำแหน่ง byte ปัจจุบัน */
+    /* slice_header_bytes approximation: current byte position */
     sh->sliceDataBitOffset = br.bytePos * 8 + (7 - br.bitPos);
     sh->sliceHeaderBytes = br.bytePos + 1;   /* + nal header */
     sh->valid = true;
@@ -399,8 +397,8 @@ static inline bool h264_parse_slice(const uint8_t *rbsp, uint32_t len,
 typedef struct {
     const uint8_t *buf;
     uint32_t       len;
-    uint32_t       pos;      /* scan หา start code ถัดไปจากจุดนี้ */
-    uint32_t       pending;  /* ตำแหน่ง NAL header ที่รู้แล้ว (=len = ไม่มี) */
+    uint32_t       pos;      /* scan for the next start code from here */
+    uint32_t       pending;  /* position of the known NAL header (=len = none) */
 } H264NalIter;
 
 static inline void h264_nal_init(H264NalIter *it, const uint8_t *buf, uint32_t len)
@@ -413,7 +411,7 @@ static inline bool h264_nal_iter_is_same(const H264NalIter *it, const uint8_t *b
     return it->buf == buf && it->len == len;
 }
 
-/* หา start code ถัดไป (3 หรือ 4 bytes) — คืนค่า offset หรือ len ถ้าไม่เจอ */
+/* find the next start code (3 or 4 bytes) — returns offset, or len if not found */
 static inline uint32_t h264_find_sc(const uint8_t *buf, uint32_t len, uint32_t from)
 {
     uint32_t z = 0;
@@ -425,11 +423,11 @@ static inline uint32_t h264_find_sc(const uint8_t *buf, uint32_t len, uint32_t f
     return len;
 }
 
-/* คืนค่า: nal type ผ่าน *type, ตำแหน่ง+ขนาด NAL body (ไม่รวม start code)
+/* returns: nal type via *type, position+size of NAL body (excluding start code)
  *
- * NOTE: แก้บั๊ก 2026-08-21 — ของเดิม set pos = ตำแหน่ง NAL header ตัวถัดไป
- * แล้วสแกนหา start code ใหม่จากจุดนั้น ทำให้ข้าม NAL สลับตัว (PPS หาย,
- * slice หายครึ่ง) เวอร์ชันนี้จำ pending = NAL header ตัวถัดไปไว้ตรง ๆ */
+ * NOTE: 2026-08-21 bugfix — previously pos was set to the position of the next NAL header
+ * then start-code scan re-ran from there, which skipped every other NAL (PPS lost,
+ * half the slices lost). This version pins pending = next NAL header directly) */
 static inline bool h264_nal_next(H264NalIter *it, const uint8_t **nal,
                                  uint32_t *nalLen, int *type)
 {
@@ -444,15 +442,15 @@ again:
     }
     if (start >= it->len) { it->pos = it->len; return false; }
     uint32_t nextSc = h264_find_sc(it->buf, it->len, start);
-    /* h264_find_sc() คืน offset หลัง byte 0x01 ของ start code ถัดไป
-     * จึงต้องถอยกลับ 1 byte เพื่อไม่ให้ 0x01 (และเลข 0 นำหน้า) ติดไปกับ
-     * NAL body — ของเดิมทำให้ nalLen ยาวเกิน 3-4 byte และ BSD decode
-     * อ่าน start code เป็นข้อมูล CABAC */
+    /* h264_find_sc() returns the offset after the 0x01 byte of the next start code
+     * so we must back up 1 byte to keep 0x01 (and the leading zeros) out of
+     * the NAL body — previously nalLen came out 3-4 bytes long and BSD decode
+     * read the start code as CABAC data */
     uint32_t bodyEnd = (nextSc > start) ? (nextSc - 1) : nextSc;
     while (bodyEnd > start && it->buf[bodyEnd - 1] == 0) bodyEnd--;
     it->pos = nextSc;
-    it->pending = nextSc;                 /* NAL header ตัวถัดไป (ถ้ามี) */
-    if (bodyEnd <= start) goto again;     /* body ว่าง — ข้าม */
+    it->pending = nextSc;                 /* next NAL header (if any) */
+    if (bodyEnd <= start) goto again;     /* empty body — skip */
     *nal = it->buf + start;
     *nalLen = bodyEnd - start;
     *type = (*nal)[0] & 0x1F;

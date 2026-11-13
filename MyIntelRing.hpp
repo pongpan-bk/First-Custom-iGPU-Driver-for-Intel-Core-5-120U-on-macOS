@@ -1,22 +1,19 @@
-/*===========================================================================
- *  MyIntelRing.hpp
- *  Hackintosh Kext — Ring Buffer Engine (Phase 5)
+/*
+ * GPU Command Ring Buffers Gen12+:
+ *    - RCS (Render Command Streamer) - 3D/Graphics
+ *    - BCS (Blitter Command Streamer) - memory copy/fill
  *
- * GPU Command Ring Buffer Gen12+:
- *    - RCS (Render Command Streamer) — 3D/Graphics
- *    - BCS (Blitter Command Streamer) — Memory Copy/Fill
- *
- * ring :
- * - Ring buffer GGTT aperture (CPU = GGTT VA → GPU = GGTT offset)
+ * The ring:
+ *    - Ring buffer in the GGTT aperture (CPU = GGTT VA -> GPU = GGTT offset)
  *    - MMIO register pair: RING_HEAD, RING_TAIL, RING_START, RING_CTL
- *    - Command emission: ringBegin() → write MI_* commands → ringAdvance()
- *    - Submission: ringSubmit() → write RING_TAIL register
+ *    - Command emission: ringBegin() writes MI_* commands, then ringAdvance()
+ *    - Submission: ringSubmit() writes the RING_TAIL register
  *
  * Linux i915:
- *    drivers/gpu/drm/i915/gt/intel_ring_submission.c — xcs_resume()
- *    drivers/gpu/drm/i915/gt/intel_ring.h — intel_ring_begin/advance
- *    drivers/gpu/drm/i915/gt/intel_engine_regs.h — RING_TAIL/HEAD/START/CTL
- *///=========================================================================
+ *    drivers/gpu/drm/i915/gt/intel_ring_submission.c - xcs_resume()
+ *    drivers/gpu/drm/i915/gt/intel_ring.h - intel_ring_begin/advance
+ *    drivers/gpu/drm/i915/gt/intel_engine_regs.h - RING_TAIL/HEAD/START/CTL
+ */
 
 #ifndef __MY_INTEL_RING_HPP__
 #define __MY_INTEL_RING_HPP__
