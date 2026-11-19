@@ -55,6 +55,7 @@ The defining property of this driver is **honest identity** paired with **pure O
 **Tested on:** Intel Core 5 120U (Raptor Lake-U) laptop, macOS 13+ (`MinKernel 22.0.0`, x86_64). Other CPU models with the same Gen 12 iGPU root are untested.
 
 ---
+test on mac os 15
 
 ## 🧠 Architectural Deep-Dive & Notable Fixes
 
