@@ -7,7 +7,6 @@ Powered By Opencode-ai
 
 <div align="center">
 
-<em>"As long as you view macOS as Unix, you will only get what you've always got. I view macOS as Linux, and that's why I get what you see."</em>
 
 # ⚡ MyIntelGPU — Honest-Identity Intel iGPU Driver for macOS
 
