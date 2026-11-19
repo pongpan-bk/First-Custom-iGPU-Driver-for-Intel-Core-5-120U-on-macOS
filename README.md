@@ -1,3 +1,10 @@
+Powered By Opencode-ai 
+
+<img width="1280" height="721" alt="opencode-c8152c4bb9ae" src="https://github.com/user-attachments/assets/3ff139b6-5e20-4621-960d-748a194d95fa" />
+
+
+
+
 <div align="center">
 
 <em>"As long as you view macOS as Unix, you will only get what you've always got. I view macOS as Linux, and that's why I get what you see."</em>
