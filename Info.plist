@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -15,19 +15,25 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>4.3.0</string>
+	<string>Gen12-5.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>4.4.213</string>
+	<string>5.0.349</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>Universal_AutoMatch_GPU</key>
+		<key>Match_GPU</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.pongpan-bk.MyIntelGPU</string>
 			<key>IOClass</key>
 			<string>MyIntelGPU</string>
+			<key>IODVDBundleName</key>
+			<string>AppleIntelICLGraphicsVADriver</string>
+			<key>IOGLBundleName</key>
+			<string>AppleIntelICLGraphicsGLDriver</string>
+			<key>IOMTLBundleName</key>
+			<string>AppleIntelICLGraphicsMTLDriver</string>
 			<key>IOMatchCategory</key>
 			<string>IOAccelerator</string>
 			<key>IOPCIClassMatch</key>
@@ -38,14 +44,16 @@
 			<integer>20000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
+			<key>IOVABundleName</key>
+			<string>AppleIntelICLLPGraphicsVAME</string>
+			<key>IOVARendererID</key>
+			<integer>17301632</integer>
 			<key>MetalPluginClassName</key>
-			<string>MyIntelGPUMTLDevice</string>
+			<string>MTLIGAccelDevice</string>
 			<key>MetalPluginName</key>
-			<string>MyIntelGPUMetalDriver</string>
-			<key>NSPrincipalClass</key>
-			<string>MyIntelGPUMTLDevice</string>
+			<string>AppleIntelICLGraphicsMTLDriver</string>
 			<key>model</key>
-			<string>Intel Raptor Lake-U</string>
+			<string>Intel(R) Graphics</string>
 		</dict>
 	</dict>
 	<key>MaxKernel</key>
