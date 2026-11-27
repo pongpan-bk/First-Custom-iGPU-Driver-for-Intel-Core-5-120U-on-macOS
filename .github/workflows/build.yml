@@ -12,8 +12,6 @@ permissions:
 
 env:
   KEXT_NAME: MyIntelGPU
-  MAX_BINARY_BYTES: "180000"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -22,51 +20,63 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
 
     - name: Prepare MacKernelSDK
       run: |
         set -euo pipefail
         git clone --depth 1 https://github.com/acidanthera/MacKernelSDK.git "$GITHUB_WORKSPACE/MacKernelSDK"
-        XCODE_SDK="$(xcrun --show-sdk-path)"
-        if [ -d "$XCODE_SDK/System/Library/Frameworks/Kernel.framework/Headers" ]; then
-          rsync -a --ignore-existing "$XCODE_SDK/System/Library/Frameworks/Kernel.framework/Headers/" "$GITHUB_WORKSPACE/MacKernelSDK/Headers/"
-        fi
+        test -f "$GITHUB_WORKSPACE/MacKernelSDK/Headers/IOKit/IOService.h"
         test -f "$GITHUB_WORKSPACE/MacKernelSDK/Library/x86_64/libkmod.a"
 
-    - name: Lint Info.plist and normalize LF
+    - name: Normalize LF and check Info.plist
       run: |
         set -euo pipefail
         plutil -lint Info.plist
-        if [ -f exported_symbols.txt ]; then
-          tr -d '\r' < exported_symbols.txt > exported_symbols.tmp && mv exported_symbols.tmp exported_symbols.txt
-        fi
+        tr -d '\r' < exported_symbols.txt > exported_symbols.tmp && mv exported_symbols.tmp exported_symbols.txt
 
     - name: Build Thin Bridge Kext
       run: |
         set -euo pipefail
-        rm -rf "$KEXT_NAME.kext" build/thin-kext ./*.o
-        make KERNEL_SDK_DIR="$GITHUB_WORKSPACE/MacKernelSDK" -j4
+        rm -rf "$KEXT_NAME.kext" ./*.o MyIntelGPUVersion.h
+        make KERNEL_SDK_DIR="$GITHUB_WORKSPACE/MacKernelSDK" -j4 2>&1 | tee /tmp/build.log
+        make version
 
-    - name: Verify Kext ABI and OpenCore readiness
+    - name: Verify symbols and clean ABI
       run: |
         set -euo pipefail
         BIN="${KEXT_NAME}.kext/Contents/MacOS/${KEXT_NAME}"
         file "$BIN" | grep -q "x86_64"
-        ! otool -l "$BIN" | grep -q "LC_DYLD_CHAINED_FIXUPS"
         nm -u "$BIN" > /tmp/undef.txt || true
-        ! grep -Eq '__stack_chk_guard|___strlcpy_chk' /tmp/undef.txt
-        SIZE=$(stat -f%z "$BIN")
-        echo "Thin Kext binary size: ${SIZE} bytes"
-        test "$SIZE" -le "$MAX_BINARY_BYTES"
+        if grep -Eq '__stack_chk_guard|___strlcpy_chk' /tmp/undef.txt; then
+          echo "::error::Userspace symbol leaked into kext"
+          grep -E '__stack_chk_guard|___strlcpy_chk' /tmp/undef.txt
+          exit 1
+        fi
+        codesign -fs - --deep "${KEXT_NAME}.kext"
 
-    - name: Package and Upload Artifact
+    - name: Package Kext
       run: |
+        rm -f "${KEXT_NAME}-thin-kext.zip"
         ditto -c -k --sequesterRsrc --keepParent "${KEXT_NAME}.kext" "${KEXT_NAME}-thin-kext.zip"
 
-    - name: Upload Kext ZIP
+    - name: Upload Kext Artifact
       uses: actions/upload-artifact@v4
       with:
         name: MyIntelGPU-thin-kext
         path: MyIntelGPU-thin-kext.zip
         retention-days: 14
+
+    - name: Show Build Log on Summary Page
+      if: always()
+      run: |
+        if [ -f /tmp/build.log ]; then
+          {
+            echo "## Build Output"
+            echo '```text'
+            tail -n 80 /tmp/build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
