@@ -3,6 +3,7 @@ Powered By Opencode-ai
 <img width="1280" height="721" alt="opencode-c8152c4bb9ae" src="https://github.com/user-attachments/assets/3ff139b6-5e20-4621-960d-748a194d95fa" />
 
 <div align="center">
+<img width="1920" height="1080" alt="Screenshot 2569-11-27 at 9 40 00 PM" src="https://github.com/user-attachments/assets/11f9c3b6-ff9f-48c9-bc66-3c651b3389c2" />
 
 # ⚡ MyIntelGPU — Thin-Bridge Intel Gen 12 iGPU Driver for macOS
 
