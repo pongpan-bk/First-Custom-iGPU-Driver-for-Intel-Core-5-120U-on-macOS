@@ -12,6 +12,8 @@ permissions:
 
 env:
   KEXT_NAME: MyIntelGPU
+  MAX_BINARY_BYTES: "220000"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -35,26 +37,32 @@ jobs:
       run: |
         set -euo pipefail
         plutil -lint Info.plist
-        tr -d '\r' < exported_symbols.txt > exported_symbols.tmp && mv exported_symbols.tmp exported_symbols.txt
+        if [ -f exported_symbols.txt ]; then
+          tr -d '\r' < exported_symbols.txt > exported_symbols.tmp && mv exported_symbols.tmp exported_symbols.txt
+        fi
 
     - name: Build Thin Bridge Kext
       run: |
         set -euo pipefail
-        rm -rf "$KEXT_NAME.kext" ./*.o MyIntelGPUVersion.h
+        rm -rf "$KEXT_NAME.kext" build/thin-objs ./*.o MyIntelGPUVersion.h
         make KERNEL_SDK_DIR="$GITHUB_WORKSPACE/MacKernelSDK" -j4 2>&1 | tee /tmp/build.log
-        make version
+        make version 2>/dev/null || true
 
     - name: Verify symbols and clean ABI
       run: |
         set -euo pipefail
         BIN="${KEXT_NAME}.kext/Contents/MacOS/${KEXT_NAME}"
         file "$BIN" | grep -q "x86_64"
+        ! otool -l "$BIN" | grep -q "LC_DYLD_CHAINED_FIXUPS"
         nm -u "$BIN" > /tmp/undef.txt || true
-        if grep -Eq '__stack_chk_guard|___strlcpy_chk' /tmp/undef.txt; then
+        if grep -Eq '__stack_chk_guard|___strlcpy_chk|_getenv' /tmp/undef.txt; then
           echo "::error::Userspace symbol leaked into kext"
-          grep -E '__stack_chk_guard|___strlcpy_chk' /tmp/undef.txt
+          grep -E '__stack_chk_guard|___strlcpy_chk|_getenv' /tmp/undef.txt
           exit 1
         fi
+        SIZE=$(stat -f%z "$BIN")
+        echo "✅ Thin Kext binary size: ${SIZE} bytes (limit: ${MAX_BINARY_BYTES})"
+        test "$SIZE" -le "$MAX_BINARY_BYTES"
         codesign -fs - --deep "${KEXT_NAME}.kext"
 
     - name: Package Kext
