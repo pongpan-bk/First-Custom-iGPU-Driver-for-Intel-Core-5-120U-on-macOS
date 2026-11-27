@@ -1,0 +1,133 @@
+MyIntelGPU Heavy Stress Test Suite
+Timestamp : 2026-11-27 21:33:48 +0700
+macOS     : 26.6.2 (25G83) / x86_64
+
+======================================================================
+  1. KEXT, IOREGISTRY & BUNDLE CONTRACT CHECK
+======================================================================
+  125    0 0xffffff7f94f67000 0xa8b      0xa8b      com.apple.driver.AppleIntelSlowAdaptiveClocking (4.0.0) E11D7EB9-74BF-3021-BB92-844FC653B494 <124 6 3>
+  130    0 0xffffff7f94f60000 0x2fe0     0x2fe0     com.apple.driver.AppleIntelPCHPMC (2.0.1) F8A6A417-5A7A-3AE8-8866-945FAE8A6A50 <129 19 18 17 6 3>
+  132    0 0xffffff7f9662a000 0x11d9b    0x11d9b    com.pongpan-bk.MyIntelGPU (5.0.377) F40C2943-86BB-3AB6-A931-E9833724B898 <126 91 19 9 7 6 3 1>
++-o MyIntelGPU  <class MyIntelGPU, id 0x100000522, registered, matched, active, busy 0 (9 ms), retain 6>
+  |   "VCS2RingInitialized" = Yes
+  |   "MetalPluginClassName" = "MTLIGAccelDevice"
+  |   "MetalPluginName" = "AppleIntelICLGraphicsMTLDriver"
+  |   "IOUserClient" = "MyIntelGPUClient"
+  |   "IntelMediaStatus" = 2
+  |   "IOPersonalityPublisher" = "com.pongpan-bk.MyIntelGPU"
+  |   "VCS0RingInitialized" = Yes
+  |   "CFBundleIdentifier" = "com.pongpan-bk.MyIntelGPU"
+  |   "IOVARendererID" = 17301632
+  |   "VECS0RingInitialized" = No
+  |   "IOClass" = "MyIntelGPU"
+  |   "CFBundleIdentifierKernel" = "com.pongpan-bk.MyIntelGPU"
+  |   "IOMTLBundleName" = "AppleIntelICLGraphicsMTLDriver"
+  |   "IOPCIMatch" = "0xa7ac8086"
+  |   "RCS-Status" = "CREATE OK"
+  +-o MyIntelGPUVCS  <class IOService, id 0x100000570, registered, matched, active, busy 0 (5 ms), retain 5>
+drwxr-xr-x  3 root  wheel  96 Nov 27 21:24 /Library/Extensions/MyIntelGPU.kext
+Executable=/Library/Extensions/MyIntelGPU.kext/Contents/MacOS/MyIntelGPU
+Identifier=com.pongpan-bk.MyIntelGPU
+Format=bundle with Mach-O thin (x86_64)
+CodeDirectory v=20100 size=1322 flags=0x2(adhoc) hashes=36+3 location=embedded
+Signature=adhoc
+Info.plist entries=15
+TeamIdentifier=not set
+Sealed Resources version=2 rules=13 files=0
+[MISSING] /Library/GPUBundles/MyIntelGPUMTLDriver.bundle
+drwxr-xr-x@ 3 root  wheel  96 Aug 13 09:51 /System/Library/Extensions/AppleIntelICLLPGraphicsVAME.bundle
+Executable=/System/Library/Extensions/AppleIntelICLLPGraphicsVAME.bundle/Contents/MacOS/AppleIntelICLLPGraphicsVAME
+Identifier=com.apple.driver.AppleIntelICLLPGraphicsVAME
+Format=bundle with Mach-O thin (x86_64)
+CodeDirectory v=20400 size=389 flags=0x0(none) hashes=5+3 location=embedded
+Platform identifier=26
+Signature size=4567
+Authority=macOS Software Signing
+Authority=Apple Code Signing Certification Authority
+drwxr-xr-x@ 3 root  wheel  96 Aug 13 09:51 /System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle
+Executable=/System/Library/Extensions/AppleIntelICLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelICLGraphicsVADriver
+Identifier=com.apple.AppleIntelICLGraphicsVADriver
+Format=bundle with Mach-O thin (x86_64)
+CodeDirectory v=20400 size=67328 flags=0x0(none) hashes=2097+3 location=embedded
+Platform identifier=26
+Signature size=4567
+Authority=macOS Software Signing
+Authority=Apple Code Signing Certification Authority
+drwxr-xr-x@ 3 root  wheel  96 Aug 13 09:51 /System/Library/Extensions/AppleIntelICLGraphicsGLDriver.bundle
+/System/Library/Extensions/AppleIntelICLGraphicsGLDriver.bundle: bundle format is ambiguous (could be app or framework)
+
+======================================================================
+  2. METAL DEVICE & WINDOWSERVER GPU MAPPING PROBE
+======================================================================
+/tmp/myintel_heavy_stress_1821/mtl_probe.swift:6:1: error: expressions are not allowed at the top level
+ 4 | let devices = MTLCopyAllDevices()
+ 5 | let defDev = MTLCreateSystemDefaultDevice()
+ 6 | print("MTLCopyAllDevicesCount=\(devices.count)")
+   | `- error: expressions are not allowed at the top level
+ 7 | for (idx, d) in devices.enumerated() {
+ 8 |     print("  [\(idx)] name=\(d.name) registryID=\(d.registryID) lowPower=\(d.isLowPower) headless=\(d.isHeadless) removable=\(d.isRemovable)")
+
+/tmp/myintel_heavy_stress_1821/mtl_probe.swift:7:1: error: statements are not allowed at the top level
+ 5 | let defDev = MTLCreateSystemDefaultDevice()
+ 6 | print("MTLCopyAllDevicesCount=\(devices.count)")
+ 7 | for (idx, d) in devices.enumerated() {
+   | `- error: statements are not allowed at the top level
+ 8 |     print("  [\(idx)] name=\(d.name) registryID=\(d.registryID) lowPower=\(d.isLowPower) headless=\(d.isHeadless) removable=\(d.isRemovable)")
+ 9 | }
+
+/tmp/myintel_heavy_stress_1821/mtl_probe.swift:10:1: error: expressions are not allowed at the top level
+ 8 |     print("  [\(idx)] name=\(d.name) registryID=\(d.registryID) lowPower=\(d.isLowPower) headless=\(d.isHeadless) removable=\(d.isRemovable)")
+ 9 | }
+10 | print("MTLSystemDefaultDevice=\(defDev?.name ?? "nil")")
+   | `- error: expressions are not allowed at the top level
+11 | 
+[WARN] Metal probe failed or returned 0 devices
+WindowServer PID: 185
+
+======================================================================
+  3. USERCLIENT OPEN/CLOSE CHURN STRESS (200 CYCLES)
+======================================================================
+Service=MyIntelGPU         ok=200 fail=0 total_ms=64.96 avg_ms=0.3248
+Service=MyIntelAccelerator ok=0 fail=200 total_ms=5.98 avg_ms=0.0299
+Service=MyIntelGPUVCS      ok=0 fail=200 total_ms=3.32 avg_ms=0.0166
+
+======================================================================
+  4. VCS / MYINTEL-DECODE MULTI-RESOLUTION & SUSTAINED BURST
+======================================================================
+--- Testing sample: /tmp/myintel_heavy_stress_1821/sample_720p.mp4 ---
+mode=default 15x_runs rc=1 elapsed=0.056s
+mode=--detile-wide 15x_runs rc=1 elapsed=0.057s
+--- Testing sample: /tmp/myintel_heavy_stress_1821/sample_1080p.mp4 ---
+mode=default 15x_runs rc=1 elapsed=0.057s
+mode=--detile-wide 15x_runs rc=1 elapsed=0.054s
+
+======================================================================
+  5. BCS BLITTER STRESS (IF AVAILABLE)
+======================================================================
+[SKIP] bcs_stress binary not found at /Users/ppbk/Documents/GitHub/IntelReviveGPU-Gen-10-12-on-Hackintosh/build/bcs_stress
+
+======================================================================
+  6. SANDBOX / MACF / KERNEL ERROR & CRASH REPORT AUDIT (LAST 30m)
+======================================================================
+
+--- Recent Panic / WindowServer / Spin / Hang Reports ---
+-rw-rw----@ 1 root  _analyticsusers   33234 Nov 27 20:06 WindowServer-2026-11-27-200610.ips
+-rw-rw----@ 1 root  _analyticsusers   33255 Nov 27 20:06 WindowServer-2026-11-27-200600.ips
+-rw-rw----@ 1 root  _analyticsusers   33231 Nov 27 20:05 WindowServer-2026-11-27-200549.ips
+-rw-rw----@ 1 root  _analyticsusers   33248 Nov 27 20:05 WindowServer-2026-11-27-200539.ips
+-rw-rw----@ 1 root  _analyticsusers   32647 Nov 27 20:05 WindowServer-2026-11-27-200529.ips
+-rw-rw----@ 1 root  _analyticsusers   33251 Nov 27 20:05 WindowServer-2026-11-27-200519.ips
+-rw-rw----@ 1 root  _analyticsusers   32647 Nov 27 20:05 WindowServer-2026-11-27-200508.ips
+-rw-rw----@ 1 root  _analyticsusers   36124 Nov 27 20:05 WindowServer-2026-11-27-200505.000.ips
+-rw-rw----@ 1 root  _analyticsusers   32623 Nov 27 20:05 WindowServer-2026-11-27-200505.ips
+-rw-rw----@ 1 root  _analyticsusers   33210 Nov 27 18:22 WindowServer-2026-11-27-182237.ips
+-rw-rw----@ 1 root  _analyticsusers   31437 Nov 27 18:22 WindowServer-2026-11-27-182235.ips
+-rw-rw----@ 1 root  _analyticsusers  167791 Nov 27 17:32 WindowServer_2026-11-27-173218_MacBook-Pro.cpu_resource.diag
+-rw-rw----@ 1 root  _analyticsusers   33194 Nov 27 15:28 WindowServer-2026-11-27-152800.ips
+-rw-rw----@ 1 root  _analyticsusers   32764 Nov 27 15:27 WindowServer-2026-11-27-152758.ips
+-rw-rw----@ 1 root  _analyticsusers   97197 Nov 27 15:24 WindowServer_2026-11-27-152451_MacBook-Pro.cpu_resource.diag
+
+======================================================================
+  DONE
+======================================================================
+Full report saved to: /Users/ppbk/Desktop/MyIntelGPU_HeavyStress_20261127_213348.txt

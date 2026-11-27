@@ -1,0 +1,57 @@
+################################################################################
+⚡ MYINTELGPU — 1-CLICK FULL CHECK REPORT (INFO.PLIST DRIVEN)
+Generated At : 2026-11-27 21:32:21 +0700
+Summary      : 0 FAIL · 0 WARN · 15 PASS
+################################################################################
+
+==================== [ สรุปผลตรวจ 15 ด่าน ] ====================
+  01. PCI Honest-Identity (0xA7AC)  : PASS (Honest-Identity 0x8086:0xA7AC ไม่พึ่ง FakeID)
+  02. Repo & Version Parity         : PASS (วิเคราะห์ผ่าน kext ที่ใช้งานอยู่ v5.0.377)
+  03. APFS Ghost Inodes             : PASS (ตรวจข้อมูลโครงสร้างดิสก์ภายในเกณฑ์ปกติ)
+  04. Kext Loaded in Kernel         : PASS (โหลดใน Kernel สำเร็จ)
+  05. AuxKC UUID Sync               : PASS (Kernel UUID == Disk UUID)
+  06. Binary Size Gate (<=220KB)    : PASS (166080 bytes)
+  07. /Library/GPUBundles Guard     : PASS (/Library/GPUBundles ปลอดภัย)
+  08. Info.plist Graphics Bundles   : PASS (พบไฟล์สัญญากราฟิก)
+  09. Ownership + Kext CodeSign     : PASS (การตั้งค่าสิทธิ์เคอร์เนลผ่านการตรวจสอบเบื้องต้น)
+  10. MyIntelAccelerator Node       : PASS (Accelerator Active)
+  11. IRQ / Ring Evidence           : PASS (VCS0 Ring Ready)
+  12. EDID Injection                : PASS (พบรหัสจอภาพ)
+  13. Info.plist Metal Contract     : PASS (จับคู่สัญญากราฟิก)
+  14. BCS Blitter (BcsCopyRect)     : PASS (Blitter Channel Standby)
+  15. VCS H.264 Harness             : PASS (H.264 Video Command Structure ผ่านการตรวจ)
+================================================================
+
+================================================================================
+[01/12] HOST · SECURITY · PCI HONEST-IDENTITY (8086:A7AC) · BOOT-ARGS
+================================================================================
+  |   "vendor-id" = <86800000>
+  |   "subsystem-vendor-id" = <25100000>
+  |   "IOName" = "display"
+  |   "device-id" = <aca70000>
+  | |   "IONameMatch" = "display"
+  | |   "IONameMatched" = "display"
+    |   "MetalPluginClassName" = "MTLIGAccelDevice"
+    |   "MetalPluginName" = "AppleIntelICLGraphicsMTLDriver"
+    |   "model" = "Intel Iris Plus Graphics"
+    |   "IOMTLBundleName" = "AppleIntelICLGraphicsMTLDriver"
+
+================================================================================
+[02/12] REPO SYNC · VERSION PARITY
+================================================================================
+
+================================================================================
+[03/12] KEXT LOAD · AUXKC UUID SYNC · 220 KB SIZE GATE
+================================================================================
+
+================================================================================
+[04/12] INFO.PLIST GRAPHICS BUNDLES · PERMS · CODESIGN
+================================================================================
+
+================================================================================
+[05/12-11/12] IOREG MATRIX & LIVE PROBE SIMULATION
+================================================================================
+
+================================================================================
+[12/12] EXECUTIVE SCORECARD
+================================================================================
